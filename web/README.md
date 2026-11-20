@@ -15,12 +15,11 @@ Open http://localhost:5173
 
 - Dark/Light theme toggle (with system preference fallback and persistence)
 - Router‑based navigation with a dedicated Admin route (`/admin`)
-- Streaming chat UI (Server‑Sent Events)
+- Streaming chat: the server sends the answer as Server‑Sent Events, and the UI shows it with a word-by-word typing effect
 - Controls:
   - Copy any message (per‑message pill button)
   - Edit your last question (moves text back to the input and removes last exchange)
   - Stop streaming (AbortController)
-  - Retry last question
   - Keyboard: Enter to send, Shift+Enter for newline
 
 ## Config
@@ -32,6 +31,14 @@ VITE_API_BASE=http://localhost:5051
 ```
 
 Create a `.env` file in the project root or start with `VITE_API_BASE` in your shell.
+
+## Tests
+
+```
+npm test
+```
+
+Vitest with Vue Test Utils and jsdom. `npm run test:watch` re-runs on save.
 
 ## Notes
 

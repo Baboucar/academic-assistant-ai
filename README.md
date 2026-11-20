@@ -2,6 +2,8 @@
 
 # **UTG Academic Assistant**
 
+[![Web tests](https://github.com/Baboucar/academic-assistant-ai/actions/workflows/web.yml/badge.svg)](https://github.com/Baboucar/academic-assistant-ai/actions/workflows/web.yml)
+
 The **UTG Academic Assistant** is a file-driven, locally controlled AI system designed for the University of The Gambia (UTG).
 It allows students and lecturers to ask natural-language questions about:
 
@@ -10,16 +12,29 @@ It allows students and lecturers to ask natural-language questions about:
 * Daily schedules
 * Venues, times, departments, and more
 
-All answers come strictly from **local timetable files** (PDF/Excel/DOCX) that the system ingests and stores in SQLite.
-AI is provided through an **open model on Groq**, ensuring fast, accurate, hallucination-free responses.
+Answers are based on **local timetable files** (PDF/Excel/DOCX) that the system ingests into SQLite.
+An **open model on Groq** (Llama 3.3 70B by default) writes each answer and is instructed to answer only from the timetable database.
+
+## **Screenshots**
+
+The screenshots use made-up timetable data.
+
+| Light theme | Dark theme |
+| --- | --- |
+| ![Chat in the light theme showing a Monday schedule](docs/screenshots/chat-light.png) | ![Chat in the dark theme with two questions and answers](docs/screenshots/chat-dark.png) |
+
+| Admin dashboard | Mobile |
+| --- | --- |
+| ![Admin dashboard listing ingested sources](docs/screenshots/admin.png) | ![Chat on a phone-sized screen](docs/screenshots/mobile-dark.png) |
 
 ---
 
 ## **Project Structure**
 
 ```text
-utg-academic-assistant/
-├── data/          # Raw timetable files (PDF / Excel / DOCX)
+academic-assistant-ai/
+├── data/          # Your timetable files (PDF / Excel / DOCX); git-ignored
+├── docs/          # Screenshots
 ├── ingest/        # Ingestion script + file parsers
 ├── server/        # Node.js API (Express + SQLite + Groq)
 ├── tmp/           # Auto-generated SQLite DB (utg.db)
@@ -30,8 +45,8 @@ utg-academic-assistant/
 
 ## **Requirements**
 
-* **Node.js 20+**
-* **Groq API key** (free tier works perfectly)
+* **Node.js 20.19+** (Vite 7 needs it)
+* **Groq API key** (the free tier is enough)
 * macOS or Linux recommended (Windows also works)
 
 ---
@@ -158,13 +173,12 @@ You can now ask questions like:
 
 The system automatically interprets natural language and queries the local database.
 
-Streaming: The chat UI streams answers token-by-token. If calling the API directly, pass `?stream=1` and consume Server-Sent Events (SSE).
+Streaming: the server relays the model's answer as Server-Sent Events (SSE), and the chat UI shows it with a word-by-word typing effect. Untick **Real-time streaming** to get the whole answer at once. If calling the API directly, pass `?stream=1` and consume the SSE stream.
 
 ### Chat controls
 - Copy: copy any message via the pill button under each bubble.
 - Edit: edit your most recent question (moves text back to input and removes the last exchange).
 - Stop: cancel streaming mid‑answer.
-- Retry last: resend the previous question quickly.
 - Keyboard: Enter to send, Shift+Enter for newline.
 
 ---
@@ -201,10 +215,11 @@ Note: The admin endpoints return 503 until ADMIN_USER and ADMIN_PASS are configu
   node ingest/ingest.js
   ```
 
-* All responses are **grounded** in the SQLite database.
-  The model is instructed *not to hallucinate* and never invents schedules.
+* Answers are **grounded** in the SQLite database: the model gets only the matching rows
+  and is instructed not to invent courses, times or lecturers.
 
-* No sensitive data is sent to third parties; only timetable text is used for interpretation.
+* Only the question and the matching timetable rows are sent to the model on Groq.
+  The timetable files stay on the server, and everything in `data/` is git-ignored.
 
 ### UI Theme
 
@@ -212,21 +227,32 @@ The web UI supports both Light and Dark themes. It respects the system preferenc
 
 ---
 
+## **Tests**
+
+The web client has component and unit tests (Vitest + Vue Test Utils):
+
+```bash
+cd web
+npm test
+```
+
+They cover SSE parsing in `api.js`, the chat panel (sending, the streamed typing effect, Stop, Edit, Copy, errors, and escaping HTML in answers), the admin panel and the theme toggle. GitHub Actions runs the tests and a production build on every push.
+
+---
+
 ## **Future Improvements (Planned)**
 
-We are continuously enhancing the system. Here are confirmed upcoming upgrades:
-
-### **1.Better PDF extraction**
+### **1. Better PDF extraction**
 
 Improve messy rows (e.g., lecturers embedded in course_code).
 
-### **2.Admin dashboard for uploads**
+### **2. Live answers with sources**
 
-A web UI in Vue to upload/remove PDF/Excel files without touching folders.
+Show the answer as it streams in, and list the matching timetable rows under each answer.
 
-### **3. Real-time text streaming**
+### **3. Follow-up questions and relative days**
 
-Live typing animation during AI responses (optional toggle).
+Understand “What about Tuesday?”, “today”, “tomorrow” and “my next class”.
 
 ### **4. Advanced search tools**
 
@@ -248,6 +274,3 @@ Automatically support:
 AI-assisted correction of PDF parsing errors.
 
 ---
-
-
-
