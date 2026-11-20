@@ -39,8 +39,7 @@ coverage/
 .vscode/
 .idea/
 
-# Generated lock files (optional)
-package-lock.json
+# Lock files from other package managers (this project uses npm)
 pnpm-lock.yaml
 yarn.lock
 
