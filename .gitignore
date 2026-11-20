@@ -30,9 +30,6 @@ logs/
 Thumbs.db
 
 # Timetable and notice files stay local: they can name staff and are not for publishing.
-# Put your own files in data/ and run the ingest; they will not be committed.
-data/*.pdf
-data/*.xls
-data/*.xlsx
-data/*.doc
-data/*.docx
+# Put your own files in data/ and run the ingest; nothing in data/ is committed.
+data/*
+!data/.gitkeep
