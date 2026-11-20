@@ -18,8 +18,8 @@ Contributions from developers, designers, researchers, and students are welcome.
 Click **Fork** on GitHub and clone your fork:
 
 ```bash
-git clone https://github.com/<your-username>/utg-academic-assistant.git
-cd utg-academic-assistant
+git clone https://github.com/<your-username>/academic-assistant-ai.git
+cd academic-assistant-ai
 ```
 
 ## 2. Install Dependencies
@@ -128,7 +128,6 @@ Chat controls in the web UI:
 - Copy any message (pill button under each bubble)
 - Edit your last question (moves text back to the input and removes the last exchange)
 - Stop streaming (AbortController)
-- Retry last question
 - Keyboard: Enter to send, Shift+Enter for newline
 
 ---
@@ -186,8 +185,9 @@ Before submitting a PR:
     * server API
     * front-end UI
 5. Use descriptive commit messages
-6. Manually verify:
-   - Chat streaming works (send a question, try Stop/Retry)
+6. Run the web tests: `cd web && npm test`
+7. Manually verify:
+   - Chat streaming works (send a question, try Stop)
    - Copy/Edit buttons behave as expected
    - Admin route loads and endpoints work when credentials are set
    - Ingestion still builds `tmp/utg.db`
