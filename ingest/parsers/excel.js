@@ -27,10 +27,12 @@ export function toIsoDate(value) {
   const s = String(value || '').trim();
   if (!s) return null;
 
-  let m = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  // year first: 2026-12-01, 2026/12/01, 2026.12.01
+  let m = s.match(/(?<!\d)(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})(?!\d)/);
   if (m) return iso(m[1], m[2], m[3]);
 
-  m = s.match(/(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})/);
+  // day first: 01/12/2026, 1.12.26 (never starting or ending inside a longer number)
+  m = s.match(/(?<!\d)(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})(?!\d)/);
   if (m) return iso(m[3], m[2], m[1]);
 
   const month = (name) => MONTHS.indexOf(name.slice(0, 3).toLowerCase()) + 1;

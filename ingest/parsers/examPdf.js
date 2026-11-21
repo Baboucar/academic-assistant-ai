@@ -31,10 +31,14 @@ const HEADING_RE = new RegExp(
     'gi',
 );
 
-// Lines that are not part of any table: "WEEK 2 (Mon. 7th to Sat. 12th Dec. 2026)", "NO EXAMS",
-// "FRIDAY 4TH DEC. 2026 AND SATURDAY 5TH DEC. 2026" (a weekday and a year, but no session time)
-const BANNER_RE =
-    /\bWEEK\s*\d+\b|\bNO\s+EXAMS?\b|\bPUBLIC\s+HOLIDAY\b|\b(MON|TUES?|WED(NES)?|THU(RS)?|FRI|SAT(UR)?|SUN)(DAY)?\b.*\b20\d{2}\b/i;
+// Lines that are not part of any table: "WEEK 2 (Mon. 7th to Sat. 12th Dec. 2026)", "NO EXAMS"
+const BANNER_RE = /\bWEEK\s*\d+\b|\bNO\s+EXAMS?\b|\bPUBLIC\s+HOLIDAY\b/i;
+// A line with a weekday and a year that was NOT read as a session heading:
+// "FRIDAY 4TH DEC. 2026 AND SATURDAY 5TH DEC. 2026", or a heading in a form the
+// reader does not know ("Tuesday 8th December 2026 (morning session)"). It is
+// kept out of the rows, and remembered: a table sitting under one must not
+// quietly take another heading's date.
+const DATED_LINE_RE = /\b(MON|TUES?|WED(NES)?|THU(RS)?|FRI|SAT(UR)?|SUN)(DAY)?\b.*\b20\d{2}\b/i;
 
 const COLUMNS = ['sn', 'code', 'title', 'lecturer', 'venue', 'invigilators', 'students'];
 
@@ -404,7 +408,8 @@ function readRows(bodyWords, labels, warnings, page) {
 function headingLikeLine(words, from, to) {
     const lines = new Map();
     for (const word of words) {
-        if (word.used || word.y <= from || word.y >= to) continue;
+        // unread text, and dated lines that were not read as headings
+        if ((word.used && word.used !== 'dated') || word.y <= from || word.y >= to) continue;
         const key = Math.round(word.y);
         const line = lines.get(key) || lines.get(key - 1) || lines.get(key + 1);
         if (line) line.push(word);
@@ -451,7 +456,9 @@ export function parseExamWords(sourcePages) {
         }
         for (const line of lines.values()) {
             const text = line.map((w) => w.s).join(' ');
-            if (text.length <= 400 && BANNER_RE.test(text)) for (const w of line) w.used = 'banner';
+            if (text.length > 400) continue;
+            if (BANNER_RE.test(text)) for (const w of line) w.used = 'banner';
+            else if (DATED_LINE_RE.test(text)) for (const w of line) w.used = 'dated';
         }
 
         return { words, headings, headers: findTableHeaders(words) };
@@ -521,10 +528,13 @@ export function parseExamWords(sourcePages) {
             const previousHeader = headers.filter((other) => other.y > header.y).sort((a, b) => a.y - b.y)[0];
             const taken = above && previousHeader && previousHeader.y < above.y;
             // text above this table that looks like a dated heading but could not be read
-            const unread = headingLikeLine(words, header.y, previousHeader ? previousHeader.y : Infinity);
+            // (when a readable heading sits above this table, only text below that heading counts)
+            const unread = headingLikeLine(words, header.y, Math.min(previousHeader ? previousHeader.y : Infinity, above && !taken ? above.y : Infinity));
 
             let heading = null;
             if (above && !taken) heading = above;
+            // two tables under one heading (a session split in two, or the header row repeated)
+            else if (above && taken && !unread) heading = above;
             else if (!above && waiting) heading = waiting; // its heading was at the foot of the page before
             else if (!above && h === 0 && table && !unread) heading = table.heading; // the header row repeated after a page break
             if (heading === waiting) waiting = null;

@@ -267,3 +267,34 @@ test('pathological heading text does not stall the reader', () => {
     assert.ok(Date.now() - started < 3000);
 });
 
+test('a table at the top of a page under a heading it cannot read is left out, not given the previous page\'s date', () => {
+    for (const heading of ['Tuesday 8th December 2026 9am - 11am', 'TUESDAY 8TH DECEMBER 2026 (MORNING SESSION)']) {
+        const { exams, warnings } = read(
+            [
+                ...line(660, 144, 'Monday 7th December 2026 9:00 - 11:00'),
+                ...header(630),
+                ...row(597, one({ sn: '1', code: 'ICT 101', title: 'Introduction to ICT' })),
+            ],
+            [
+                ...line(720, 144, heading),
+                ...header(700),
+                ...row(667, one({ sn: '2', code: 'ICT 102', title: 'Computing' })),
+            ],
+        );
+        assert.deepEqual(exams.map((e) => e.code), ['ICT 101'], heading);
+        assert.ok(warnings.some((w) => /could not read/.test(w) && /left out/.test(w)), warnings.join('\n'));
+    }
+});
+
+test('two tables under one heading share its date', () => {
+    const { exams, warnings } = read([
+        ...line(660, 144, 'Monday 7th December 2026 9:00 - 11:00'),
+        ...header(630),
+        ...row(597, one({ sn: '1', code: 'ICT 101', title: 'Introduction to ICT' })),
+        ...header(540),
+        ...row(507, one({ sn: '2', code: 'ICT 102', title: 'Computing' })),
+    ]);
+    assert.deepEqual(exams.map((e) => [e.code, e.date]), [['ICT 101', '2026-12-07'], ['ICT 102', '2026-12-07']]);
+    assert.deepEqual(warnings, []);
+});
+

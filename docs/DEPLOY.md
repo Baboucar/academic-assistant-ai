@@ -24,8 +24,9 @@ HTTPS is not optional: passwords and sign-in tokens travel in every request.
 Caddy gets the certificate and renews it by itself.
 
 **Read [What has and has not been tested](#what-has-and-has-not-been-tested)
-at the end before you rely on this.** The Docker image and the Caddy
-configuration were written carefully but have not been run yet.
+at the end before you rely on this.** The Docker image builds and starts, and
+the Caddy configuration is valid (both are checked on every push), but the
+whole recipe has not yet been followed on a real server.
 
 Throughout, `assistant.example.edu` stands for your own name and
 `/opt/academic-assistant-ai` for where you put the code.
@@ -190,7 +191,7 @@ docker compose logs api
 ```
 
 ```text
-Refusing to start in production until these are fixed (see server/.env.example):
+Refusing to start in production until these are fixed (see server/.env.example, or deploy/.env.production.example with Docker):
   - SMTP_HOST is not set: sign-up codes cannot be emailed.
 ```
 
@@ -660,9 +661,16 @@ in place of `docker compose logs api --since 30m`.
 
 ## What has and has not been tested
 
-This recipe was written on a computer where Docker was not running, so be
-ready for small corrections the first time it is used on a real server. Please
-fix this document when you find one.
+This recipe has not yet been followed from start to finish on a real server,
+so be ready for small corrections the first time. Please fix this document when
+you find one.
+
+Checked automatically on every push (the "docker image" job in
+`.github/workflows/web.yml`, on a Linux x86_64 machine):
+
+- The Docker image builds, including the database module.
+- A container started from it answers `/api/health`.
+- `caddy validate` accepts `deploy/Caddyfile`.
 
 Tested (on macOS with Node 22, using a copy of `server/` and `ingest/` with
 only the files the image contains, and the image's settings):
@@ -691,13 +699,13 @@ only the files the image contains, and the image's settings):
 
 Not tested:
 
-- Building or running the Docker image, on any kind of processor. In
-  particular, that the database module installs on Linux inside the image
-  (the Dockerfile includes a compiler in case no ready-made binary is
-  available, and stops the build if the module does not load).
-- Caddy with `deploy/Caddyfile`: it has not been checked with `caddy validate`,
-  and neither certificate issuing nor streamed answers through Caddy have been
-  seen working.
+- The Docker image on an ARM processor (Oracle's free machines are ARM): only
+  x86_64 is built automatically. The Dockerfile includes a compiler in case no
+  ready-made database module exists for the processor.
+- Caddy actually serving the site: certificate issuing and streamed answers
+  through Caddy have not been seen working.
+- Volume ownership for the non-root user, and the image's own HEALTHCHECK as
+  Docker runs it.
 - `docker compose run --rm web-build`, the cron lines, `docker compose cp`, and
   the `docker compose` commands in the restore steps.
 - Everything under "Without Docker (systemd)" and "The web app on Netlify

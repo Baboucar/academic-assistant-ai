@@ -116,9 +116,11 @@ with Ctrl+C.
 
 ## How long a full run takes, and what it uses
 
-These are estimates. Only two questions have been run against the real model
-so far (they took 3.5 and 1.1 seconds); a full run has not been timed. Correct
-this section after your first full run.
+Measured on the first full run (21 November 2026, `openai/gpt-oss-120b` on
+Groq's free tier): 11 minutes 24 seconds, 75 model calls, **68 of 70 passed**.
+The two that failed were abbreviations no alias covered ("os", "hci"); the app
+now also recognises an abbreviation from the initials of a loaded course title,
+and both pass.
 
 - **Time: about 12 minutes** for the 70 questions at the default pause: 69
   pauses of 8 seconds, plus one to four seconds for each question.
@@ -190,9 +192,8 @@ tell a bad result from an unfinished one.
 Read the categories, not only the total. A change that fixes typos and breaks
 follow-ups can leave the total where it was.
 
-Some cases are expected to fail until the app can handle them, for example
-`typo-lecturer` (a misspelt surname) and `venue-numbered` ("Lab 2" as opposed
-to "Lab 1"). The `why` of each case says what it is there to catch. Do not
+Every case passed when this was written. When one starts failing, the `why` of
+the case says what it is there to catch. Do not
 delete a case because it fails: that is the record of what does not work yet.
 
 `today-no-dept`, `tomorrow-dept` and the other "relative day" cases expect

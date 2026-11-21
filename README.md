@@ -99,13 +99,13 @@ Then open `server/.env` and set at least:
 | Variable | What it is |
 | --- | --- |
 | `GROQ_API_KEY` | Your Groq key. Chat answers need it. |
-| `ADMIN_USER`, `ADMIN_PASS` | Sign-in for the admin dashboard. Until both are set, `/api/admin/*` returns 503. |
+| `ADMIN_USER`, `ADMIN_PASS` | Sign-in for the admin dashboard. Until an admin sign-in is set (this, or `ADMIN_USERS`), `/api/admin/*` returns 503. |
 | `ADMIN_USERS` | More admins, each with their own password: `awa:long password,lamin:another one`. The change log records who did what. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` | Email server for sign-up and password codes. Without `SMTP_HOST`, codes are printed in the server log. |
 | `STUDENT_EMAIL_DOMAINS` | Email domains that may register, comma-separated. Defaults to `utg.edu`. |
 | `MAT_NUMBER_PATTERN` | What a matriculation number looks like. Defaults to 5 to 12 letters or digits. |
 | `CHAT_PER_MINUTE`, `CHAT_PER_DAY` | Questions each student may ask. Default 10 a minute and 150 a day. |
-| `MAIL_PER_ADDRESS_PER_DAY`, `MAIL_PER_DAY` | Emails a day to one address (8) and in total (400), to protect the mailbox's allowance. |
+| `MAIL_PER_ADDRESS_PER_DAY`, `MAIL_PER_DAY`, `MAIL_PER_NETWORK_PER_HOUR` | Emails a day to one address (8) and in total (400), and sign-up or reset requests an hour from one network address (120). Sign-ups may use at most 80% of the daily total, so password resets keep working. |
 | `MAT_IN_EMAIL` | Set to `1` if student addresses contain the matriculation number; sign-up then requires the two to agree. |
 | `ANSWER_CACHE_SECONDS` | How long a repeated first question is answered from memory. Default 600; `0` turns it off. |
 | `DB_PATH`, `ACCOUNTS_DB_PATH`, `DATA_DIR`, `BACKUP_DIR` | Where the timetable database, the accounts database, the uploaded files and the backups live. |
@@ -357,8 +357,8 @@ Every upload is checked before it replaces anything:
 
 - Values are put into one form (Mon..Sun, 24-hour times, ISO dates). A row that cannot be used is left
   out and reported with its reason.
-- If a new version of a file reads nothing, or less than half of what is loaded from it, it is
-  **refused**: the old file and its rows stay, and the dashboard offers "Replace anyway". This is what
+- If a new version of a file reads nothing, or fewer than half the rows loaded from it (for files of
+  four rows or more), it is **refused**: the old file and its rows stay, and the dashboard offers "Replace anyway". This is what
   stops a renamed column from silently emptying a department's timetable.
 - What you chose for each file (type, semester, department) is saved beside the files in
   `data/.sources.json`, so `data/` on its own is enough to rebuild the timetable database.
@@ -420,8 +420,8 @@ Upload and re-ingest wait for the ingest to finish and return its log, so the re
   `accounts.db-wal` / `-shm` next to it), start the server.
 
 * **Going live**: follow [docs/DEPLOY.md](docs/DEPLOY.md) (one small Linux machine, Docker, Caddy for
-  HTTPS). The Docker image and Caddy setup in it have not been run yet; the guide says exactly what was
-  and was not tested.
+  HTTPS). The Docker image is built and started on every push, but the guide has not yet been followed
+  on a real server; it says exactly what was and was not tested.
 
 ---
 

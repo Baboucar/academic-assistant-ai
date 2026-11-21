@@ -91,20 +91,30 @@ const insN = db.prepare(`
   VALUES (?,?,?, ?,?)
 `);
 
-// Words in a file name that are never a department code
-const NOT_A_DEPT = new Set([
-    'draft', 'final', 'new', 'old', 'copy', 'exam', 'exams', 'timetable', 'time', 'table', 'schedule', 'calendar',
-    'notice', 'notices', 'sem', 'semester', 'first', 'second', 'utg', 'the', 'and', 'for', 'class', 'classes', 'pdf', 'xlsx', 'xls', 'docx',
-]);
+// Words that start a file name without being a department: "Latest timetable.xlsx", "June exams.pdf"
+const NOT_A_DEPT = new Set(
+    (
+        'draft final new old copy latest updated revised current master main full resit exam exams timetable time table ' +
+        'schedule calendar notice notices sem semester first second third utg the and for class classes year level week ' +
+        'book sheet school dept campus all general monday tuesday wednesday thursday friday saturday sunday ' +
+        'jan feb mar apr may jun jul aug sep sept oct nov dec june july pdf xlsx xls docx'
+    ).split(' '),
+);
 
 /**
- * A department label for a file nobody labelled: a short word at the start of
- * its name ("cs-timetable.pdf" -> CS, "SITC Draft EXAMS.pdf" -> SITC). Anything
- * else is UNKNOWN; choosing the department at upload is the reliable way.
+ * A department label for a file nobody labelled. Only a name that plainly
+ * starts with one counts: a short word in capitals ("SITC Draft EXAMS.pdf"),
+ * or a short word right before "timetable" ("cs-timetable.pdf"). Anything
+ * else is UNKNOWN: choosing the department at upload is the reliable way, and
+ * a wrong guess would become a department students' questions get matched to.
  */
 function deptGuessFromName(f) {
-    const first = f.replace(/\.[^.]+$/, '').split(/[^A-Za-z]+/).filter(Boolean)[0] || '';
-    return /^[A-Za-z]{2,6}$/.test(first) && !NOT_A_DEPT.has(first.toLowerCase()) ? first.toUpperCase() : 'UNKNOWN';
+    const tokens = f.replace(/\.[^.]+$/, '').split(/[^A-Za-z]+/).filter(Boolean);
+    const [first, next] = tokens;
+    if (!first || NOT_A_DEPT.has(first.toLowerCase())) return 'UNKNOWN';
+    const inCapitals = /^[A-Z]{2,6}$/.test(first);
+    const beforeTimetable = /^[A-Za-z]{2,4}$/.test(first) && /^(timetable|timetables|exam|exams|classes|schedule)$/i.test(next || '');
+    return inCapitals || beforeTimetable ? first.toUpperCase() : 'UNKNOWN';
 }
 
 /** Parse one file and replace its rows. Returns a log line. */

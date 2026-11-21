@@ -31,8 +31,16 @@ const CHECKS = {
         if (!d) return { reason: `"${clean(day)}" is not a day of the week` };
         const from = toTime(start);
         if (!from) return { reason: `start time "${clean(start)}" could not be read` };
-        const to = clean(end) ? toTime(end) : '';
+        let to = clean(end) ? toTime(end) : '';
         if (to === null) return { reason: `end time "${clean(end)}" could not be read` };
+        if (to && to <= from) {
+            // "11:00" to "1:00" is one in the afternoon; anything else that ends before it starts is a mistake
+            // (only for 1:00 to 7:00: "9:00" after a 14:00 start is not a 9pm finish, it is a typo)
+            const hour = Number(to.slice(0, 2));
+            const later = hour + 12;
+            if (hour >= 1 && hour <= 7 && `${later}:${to.slice(3)}` > from) to = `${later}:${to.slice(3)}`;
+            else return { reason: `it ends (${to}) before it starts (${from})` };
+        }
         return { row: [clean(dept) || 'UNKNOWN', clean(code), clean(title), d, from, to, clean(venue), clean(lecturer)] };
     },
 
@@ -88,5 +96,6 @@ export function checkRows(type, rows) {
 export function looksLikeDataLoss(before, after) {
     if (before === 0) return false;
     if (after === 0) return true;
-    return before >= 10 && after < before * 0.5;
+    // fewer than half of what was there (for files of more than a handful of rows)
+    return before >= 4 && after < before * 0.5;
 }

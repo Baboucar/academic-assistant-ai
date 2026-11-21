@@ -54,7 +54,7 @@ cp server/.env.example server/.env
 
 Notes:
 - Do NOT commit `.env` files to the repository.
-- The admin endpoints return 503 until `ADMIN_USER` and `ADMIN_PASS` are set.
+- The admin endpoints return 503 until an admin sign-in is set (`ADMIN_USER` and `ADMIN_PASS`, or `ADMIN_USERS`).
 
 ## 4. Add Timetable Files
 
@@ -108,11 +108,14 @@ sqlite3 tmp/utg.db "SELECT COUNT(*) FROM timetable;"
 
 ### Test the API
 
+Asking a question needs a signed-in student, so the quickest check that the API is up is:
+
 ```bash
-curl -X POST http://localhost:5051/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"question":"Who teaches AI?"}'
+curl http://localhost:5051/api/health
 ```
+
+To ask a question from the command line, sign in first and send the token
+(see "Student accounts" in the README), or use the web app.
 
 ### Test the UI
 
@@ -236,18 +239,15 @@ Improve interpretation of:
 * Departments
 * Date and time detection
 
-### 6. Multiple Semester Support
+### 6. Semesters
 
-* Store a semester or academic year label
-* Switch timetables from the UI
+A current semester exists (the latest label, or one an admin pins). Still wanted: letting a student
+look at another semester from the chat.
 
-### 7. Docker Support
+### 7. Deployment
 
-Create `docker-compose` for:
-
-* ingestion
-* API server
-* front-end
+There is a Dockerfile, a docker-compose file and `docs/DEPLOY.md`. Still wanted: someone following the
+guide on a real server and correcting it, and an ARM build.
 
 ### 8. Front-End Improvements
 

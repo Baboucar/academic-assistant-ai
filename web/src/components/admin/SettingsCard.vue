@@ -80,7 +80,8 @@ async function drop(name) {
   try {
     await removeAlias(name);
   } catch (e) {
-    toast.error('Could not remove it', { description: e?.message });
+    // already removed (a second click, or another admin): the list has been refreshed
+    if (e?.status !== 404) toast.error('Could not remove it', { description: e?.message });
   }
 }
 </script>

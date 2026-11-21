@@ -279,3 +279,70 @@ test('leaving the semester box blank keeps the file\'s label instead of inventin
     }
 });
 
+test('dates are read the same whether the year comes first or last', async () => {
+    const { toIsoDate } = await import('../../ingest/parsers/excel.js');
+    assert.deepEqual(
+        ['2026/12/01', '2026.12.14', '2026-12-01', '01/12/2026', '1.12.26', '12/1/126', '2026/13/01'].map(toIsoDate),
+        ['2026-12-01', '2026-12-14', '2026-12-01', '2026-12-01', '2026-12-01', null, null],
+    );
+});
+
+test('a class that ends before it starts is put right when it is plainly an afternoon time, and left out otherwise', async () => {
+    const { checkRows, looksLikeDataLoss } = await import('../../ingest/check.js');
+    const base = ['CS', 'CPS 1', 'T', 'Mon'];
+    const { rows, rejected } = checkRows('timetable', [
+        [...base, '11:00', '1:00', 'Hall', 'X'],
+        [...base, '14:00', '9:00', 'Hall', 'X'],
+    ]);
+    assert.deepEqual(rows.map((r) => [r[4], r[5]]), [['11:00', '13:00']]);
+    assert.match(rejected[0].reason, /ends \(09:00\) before it starts \(14:00\)/);
+
+    // "fewer than half" applies from four rows up; nothing read is always a loss
+    assert.deepEqual([[9, 1], [8, 3], [4, 1], [3, 1], [2, 0], [0, 0], [10, 5]].map(([b, a]) => looksLikeDataLoss(b, a)), [true, true, true, false, true, false, false]);
+});
+
+test('a department is only guessed from a file name that plainly gives one', async () => {
+    const guess = async (name) => {
+        const bytes = workbook([classRow(1)]);
+        const body = await (await uploadForm(name, bytes, { type: 'timetable', reingest: '1' })).json();
+        const dept = ctx.db.prepare(`SELECT dept FROM timetable WHERE source_file = ?`).get(body.file).dept;
+        await fetch(`${ctx.base}/api/admin/source/${encodeURIComponent(body.file)}?deleteFile=1`, { method: 'DELETE', headers: ctx.auth() });
+        return dept;
+    };
+    assert.equal(await guess('cs-timetable.xlsx'), 'CS');
+    assert.equal(await guess('SITC Draft EXAMS.xlsx'), 'SITC');
+    for (const name of ['Latest timetable.xlsx', 'June exams timetable.xlsx', 'Year 1 timetable.xlsx', 'Main campus timetable.xlsx', 'Monday classes.xlsx', 'Book1.xlsx', 'economics-timetable.xlsx']) {
+        assert.equal(await guess(name), 'UNKNOWN', name);
+    }
+});
+
+test('two uploads of the same file at once do not trample each other', async () => {
+    const good = workbook(Array.from({ length: 6 }, (_, i) => classRow(i)));
+    const [a, b] = await Promise.all([
+        uploadForm('race.xlsx', good, { type: 'timetable', reingest: '1' }),
+        uploadForm('race.xlsx', good, { type: 'timetable', reingest: '1' }),
+    ]);
+    assert.deepEqual([a.status, b.status].sort(), [200, 409]);
+    assert.equal(loaded('race.xlsx'), 6);
+    assert.ok(fs.readFileSync(path.join(ctx.dataDir, 'race.xlsx')).equals(good));
+    assert.deepEqual(fs.readdirSync(ctx.dataDir).filter((f) => f.startsWith('.incoming-') || f.startsWith('.previous-')), []);
+    await fetch(`${ctx.base}/api/admin/source/race.xlsx?deleteFile=1`, { method: 'DELETE', headers: ctx.auth() });
+});
+
+test('the saved choices survive losing the database, even when another file is changed first', async () => {
+    const bytes = workbook([classRow(1)]);
+    await uploadForm('keep.xlsx', bytes, { type: 'timetable', dept: 'ECON', semester: '2026 S2', reingest: '1' });
+    // the timetable database forgets the file, as it would if it were deleted and recreated
+    ctx.db.prepare(`DELETE FROM timetable WHERE source_file = 'keep.xlsx'`).run();
+    ctx.db.prepare(`DELETE FROM sources WHERE source_file = 'keep.xlsx'`).run();
+    // an admin does something else before re-ingesting it
+    await uploadForm('other.xlsx', bytes, { type: 'timetable', reingest: '1' });
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(ctx.dataDir, '.sources.json'), 'utf8'));
+    assert.deepEqual(manifest['keep.xlsx'], { type: 'timetable', semester: '2026 S2', dept: 'ECON' });
+    for (const f of ['keep.xlsx', 'other.xlsx']) {
+        await fetch(`${ctx.base}/api/admin/source/${f}?deleteFile=1`, { method: 'DELETE', headers: ctx.auth() });
+    }
+    assert.equal(JSON.parse(fs.readFileSync(path.join(ctx.dataDir, '.sources.json'), 'utf8'))['keep.xlsx'], undefined, 'gone once the file itself is deleted');
+});
+

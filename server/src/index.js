@@ -22,6 +22,13 @@ if (!env.PRODUCTION) {
     }
 }
 
+if (env.PRODUCTION && !env.TRUST_PROXY) {
+    console.warn(
+        'TRUST_PROXY is not set. If this runs behind Caddy, nginx or a hosting platform, set TRUST_PROXY=1: ' +
+            'otherwise every visitor appears to come from one address and the sign-in limits apply to all of them together.',
+    );
+}
+
 const server = createApp().listen(env.PORT, () => {
     console.log(`API on :${env.PORT} (${env.PRODUCTION ? 'production' : 'development'})`);
 });

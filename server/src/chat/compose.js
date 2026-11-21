@@ -110,7 +110,8 @@ export function scheduleSummary(context) {
         }
     } else {
         const days = [...new Set(matches.map((r) => dayName(r.day)).filter(Boolean))];
-        if (![].concat(filters.day || []).length && days.length && days.length <= 4) text += `, on ${list(days)}`;
+        // (not from a list cut at 50 rows: the days in it are not all the days there are)
+        if (n < 50 && ![].concat(filters.day || []).length && days.length && days.length <= 4) text += `, on ${list(days)}`;
         text += '.';
         if (nextClass) {
             const first = matches[0];

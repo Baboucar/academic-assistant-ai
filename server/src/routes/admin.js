@@ -60,8 +60,14 @@ function resolveDataFile(name) {
  */
 function writeManifest() {
     try {
+        // Start from what is already saved for files still in the folder: if the
+        // timetable database was lost, it no longer knows them, and their choices
+        // must survive until they are re-ingested.
+        let saved = {};
+        try { saved = JSON.parse(fs.readFileSync(MANIFEST, 'utf8')) || {}; } catch { /* none yet */ }
+        const kept = Object.fromEntries(Object.entries(saved).filter(([file]) => fs.existsSync(path.join(DATA, file))));
         const rows = db.prepare(`SELECT source_file, type, semester, dept FROM sources ORDER BY source_file`).all();
-        const manifest = Object.fromEntries(rows.map(({ source_file, ...rest }) => [source_file, rest]));
+        const manifest = { ...kept, ...Object.fromEntries(rows.map(({ source_file, ...rest }) => [source_file, rest])) };
         fs.writeFileSync(`${MANIFEST}.tmp`, JSON.stringify(manifest, null, 2));
         fs.renameSync(`${MANIFEST}.tmp`, MANIFEST);
     } catch (e) {
@@ -135,6 +141,19 @@ function reasonFrom(result) {
     return line.replace(/^Refused:\s*/, 'Not replaced: ').replace(/^Failed:\s*/, 'Could not read ').replace(' -> ', ': ');
 }
 
+// One change to a file at a time: two uploads of the same name at once would
+// each move the other's files around.
+const busyFiles = new Set();
+async function exclusively(file, work) {
+    if (busyFiles.has(file)) throw new HttpError(409, `${file} is being uploaded or re-ingested right now. Try again when it has finished.`);
+    busyFiles.add(file);
+    try {
+        return await work();
+    } finally {
+        busyFiles.delete(file);
+    }
+}
+
 const rowsLoaded = (file) =>
     ['timetable', 'exams', 'calendar', 'notices'].reduce(
         (sum, table) => sum + db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE source_file = ?`).get(file).n,
@@ -169,6 +188,9 @@ admin.post(
         if (department && !/^[A-Z0-9][A-Z0-9 &-]{0,19}$/.test(department)) {
             reject(400, 'Department should be a short code such as CS or LAW (letters and numbers, up to 20 characters)');
         }
+        if (busyFiles.has(base)) reject(409, `${base} is being uploaded or re-ingested right now. Try again when it has finished.`);
+        busyFiles.add(base);
+        try {
         // A label that differs from an existing one only in capitals or spacing is the same semester
         let sem = String(semester || '').replace(/\s+/g, ' ').trim().slice(0, 60);
         const sameLabel = sem && Queries.semesters().find((s) => s.semester.toLowerCase() === sem.toLowerCase());
@@ -226,6 +248,9 @@ admin.post(
             kept_previous: kept,
             ingest,
         });
+        } finally {
+            busyFiles.delete(base);
+        }
     }),
 );
 
@@ -271,7 +296,8 @@ admin.post(
             only = resolved.file;
         }
 
-        const result = await runIngest({ file: only, semester: String(semester || '').trim().slice(0, 60), force: force === true || force === '1' });
+        const run = () => runIngest({ file: only, semester: String(semester || '').trim().slice(0, 60), force: force === true || force === '1' });
+        const result = only ? await exclusively(only, run) : await run();
         writeManifest();
         answerCache.clear();
         recordAdminAction(req.admin, 'reingest', only || 'all files', result.ok ? 'ok' : result.refused ? 'refused: would have dropped rows' : 'failed');
