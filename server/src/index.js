@@ -1,45 +1,24 @@
 // server/src/index.js
-import express from 'express';
-import cors from 'cors';
 import { env } from './env.js';
+import { createApp } from './app.js';
 
-import { health } from './routes/health.js';
-import { tools } from './routes/tools.js';
-import { chat } from './routes/chat.js';
-import { admin } from './routes/admin.js';
-import { adminAuth } from './middleware/adminAuth.js';
-import { errorMiddleware } from './errors.js';
+if (!env.GROQ_API_KEY) {
+    console.warn('GROQ_API_KEY is not set: chat requests will fail until it is added to server/.env');
+}
+if (!env.ADMIN_USER || !env.ADMIN_PASS) {
+    console.warn('ADMIN_USER / ADMIN_PASS are not set: the admin dashboard is disabled');
+}
 
-const app = express();
+if (env.DEV_SHOW_CODES) {
+    console.warn(
+        env.SMTP_HOST
+            ? 'DEV_SHOW_CODES is ignored because SMTP_HOST is set.'
+            : 'DEV_SHOW_CODES is on: sign-up codes are shown on screen instead of emailed. Local testing only.',
+    );
+} else if (!env.SMTP_HOST) {
+    console.warn('SMTP_HOST is not set: sign-up codes are printed in this log instead of emailed');
+}
 
-// middlewares
-app.use(cors({ origin: env.ORIGIN || '*' }));
-app.use(express.json({ limit: '10mb' }));
-
-// tiny request logger with timing (no external deps)
-app.use((req, res, next) => {
-    const start = Date.now();
-    res.on('finish', () => {
-        const ms = Date.now() - start;
-        // method path status ms
-        console.log(`${req.method} ${req.originalUrl} -> ${res.statusCode} ${ms}ms`);
-    });
-    next();
-});
-
-// routes
-app.use('/api/health', health);
-app.use('/api/tools', tools);
-app.use('/api', chat);
-app.use('/api/admin', adminAuth, admin);
-
-// 404 (optional)
-app.use((req, res) => res.status(404).json({ error: 'Not found' }));
-
-// Centralized error handler
-app.use(errorMiddleware);
-
-// start server
-app.listen(env.PORT, () => {
+createApp().listen(env.PORT, () => {
     console.log(`API on :${env.PORT}`);
 });

@@ -46,15 +46,10 @@ cd ..
 
 ## 3. Environment Variables
 
-Inside the `/server` folder, create a `.env` file:
+Copy the example file and fill in your Groq key and an admin password:
 
-```
-GROQ_API_KEY=your_key_here
-MODEL=llama-3.3-70b-versatile
-ORIGIN=*
-# Admin Basic Auth for /api/admin/* endpoints
-ADMIN_USER=admin
-ADMIN_PASS=change_me
+```bash
+cp server/.env.example server/.env
 ```
 
 Notes:
@@ -185,7 +180,7 @@ Before submitting a PR:
     * server API
     * front-end UI
 5. Use descriptive commit messages
-6. Run the web tests: `cd web && npm test`
+6. Run the tests: `npm --prefix web test` and `npm --prefix server test`
 7. Manually verify:
    - Chat streaming works (send a question, try Stop)
    - Copy/Edit buttons behave as expected

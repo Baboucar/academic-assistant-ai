@@ -18,6 +18,22 @@ CREATE INDEX IF NOT EXISTS idx_tt_day_dept ON timetable(day, dept);
 CREATE INDEX IF NOT EXISTS idx_tt_course ON timetable(course_code);
 CREATE INDEX IF NOT EXISTS idx_tt_semester ON timetable(semester);
 
+CREATE TABLE IF NOT EXISTS exams (
+  id INTEGER PRIMARY KEY,
+  dept TEXT,
+  course_code TEXT,
+  course_title TEXT,
+  date TEXT,          -- YYYY-MM-DD
+  start_time TEXT,    -- HH:MM
+  end_time TEXT,
+  venue TEXT,
+  lecturer TEXT,
+  source_file TEXT,
+  semester TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_exams_date ON exams(date);
+CREATE INDEX IF NOT EXISTS idx_exams_course ON exams(course_code);
+
 CREATE TABLE IF NOT EXISTS calendar (
                                         id INTEGER PRIMARY KEY,
                                         date TEXT,
@@ -43,8 +59,9 @@ CREATE INDEX IF NOT EXISTS idx_notices_semester ON notices(semester);
 CREATE TABLE IF NOT EXISTS sources (
                                        id INTEGER PRIMARY KEY,
                                        source_file TEXT UNIQUE,
-                                       type TEXT CHECK (type IN ('timetable','calendar','notices')),
+                                       type TEXT CHECK (type IN ('timetable','exams','calendar','notices')),
     semester TEXT,
-    ingested_at TEXT DEFAULT (datetime('now'))
+    ingested_at TEXT DEFAULT (datetime('now')),
+    dept TEXT
     );
 CREATE INDEX IF NOT EXISTS idx_sources_semester ON sources(semester);

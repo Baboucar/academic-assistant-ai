@@ -1,6 +1,6 @@
 // server/src/ai/slotExtractor.js
-// Use Node's global fetch (Undici) available in Node 18+; no need for node-fetch.
-import { env } from '../env.js';
+import { complete } from './groq.js';
+import { toDay3 } from '../utils/dates.js';
 
 /**
  * Use the Groq model to extract structured slots from a natural-language question.
@@ -24,7 +24,9 @@ and produce a JSON object with this schema:
   "day": string | null,               // 3-letter English weekday e.g. "Mon", "Tue"
   "date_iso": string | null,          // YYYY-MM-DD if user gives a specific date
   "time": string | null,              // HH:MM 24h if user mentions explicit time
-  "lecturer_name": string | null      // full name of lecturer if question mentions them
+  "lecturer_name": string | null,     // full name of lecturer if question mentions them
+  "venue": string | null,             // room / hall / lab name if the question is about a place
+  "exam": boolean                     // true if the question is about an exam / the exam timetable
 }
 
 Guidelines:
@@ -57,7 +59,8 @@ Guidelines:
 - day:
   - If the question says Monday, Tuesday, etc., map to 3-letter English form:
     "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun".
-  - For "today" or "tomorrow", you may leave null (the backend can resolve relative if needed).
+  - Resolve relative days ("today", "tomorrow", "yesterday", "tonight") using the current date
+    given in the user message, and output the resulting 3-letter weekday.
 
 - date_iso:
   - If the user gives a full date like "2025-11-03", copy it exactly here.
@@ -75,6 +78,21 @@ Guidelines:
       "Jane Doe" → "Jane Doe"
   - If no lecturer is mentioned, use null.
 
+- venue:
+  - A room, hall or lab the user asks about, e.g. "Lab 2", "Chancery Hall". Otherwise null.
+
+- exam:
+  - true when the user asks about an exam, examination, paper or the exam timetable
+    ("When is the AI exam?", "Do I have an exam tomorrow?"). false for ordinary classes.
+
+- Follow-up questions:
+  - You may be given the earlier turns of the conversation. If the latest question is a
+    follow-up that leaves details out ("What about Tuesday?", "And who teaches it?",
+    "Where is that?"), carry the missing slots over from the earlier turns (including "exam")
+    and change only what the latest question changes.
+  - If the latest question starts a new topic, ignore the earlier turns.
+  - Small talk ("hi", "thanks") has no slots: set everything to null with intent "generic".
+
 Examples:
 
 Q: "Who is teaching AI?"
@@ -86,7 +104,9 @@ Q: "Who is teaching AI?"
   "day": null,
   "date_iso": null,
   "time": null,
-  "lecturer_name": null
+  "lecturer_name": null,
+  "venue": null,
+  "exam": false
 }
 
 Q: "Show Monday schedule for CS."
@@ -98,7 +118,9 @@ Q: "Show Monday schedule for CS."
   "day": "Mon",
   "date_iso": null,
   "time": null,
-  "lecturer_name": null
+  "lecturer_name": null,
+  "venue": null,
+  "exam": false
 }
 
 Q: "How many courses is Baboucarr Drammeh teaching on Monday?"
@@ -110,123 +132,113 @@ Q: "How many courses is Baboucarr Drammeh teaching on Monday?"
   "day": "Mon",
   "date_iso": null,
   "time": null,
-  "lecturer_name": "Baboucarr Drammeh"
+  "lecturer_name": "Baboucarr Drammeh",
+  "venue": null,
+  "exam": false
 }
 
 Return ONLY valid JSON, no extra text.
 `;
 
-export async function extractSlots(question) {
-    const body = {
-        model: env.MODEL,
-        temperature: 0,
-        messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user', content: String(question || '') },
-        ],
-    };
+const EMPTY_SLOTS = {
+    intent: 'generic',
+    course_code: null,
+    title_kw: null,
+    dept: null,
+    day: null,
+    date_iso: null,
+    time: null,
+    lecturer_name: null,
+    venue: null,
+    exam: false,
+};
 
-    const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${env.GROQ_API_KEY}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-    });
+const INTENTS = new Set(['who_teaches', 'when_is', 'where_is', 'schedule_day', 'next_class', 'generic']);
 
-    if (!r.ok) {
-        throw new Error(`Groq slotExtractor error ${r.status}: ${await r.text()}`);
-    }
+const text = (v) => (typeof v === 'string' || typeof v === 'number' ? String(v).trim() : '');
 
-    const j = await r.json();
-    let txt = j.choices?.[0]?.message?.content?.trim() || '{}';
-
-    // Some models occasionally wrap JSON in ```json ```; strip that.
-    txt = txt.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
-
-    let parsed;
+/** Parse the model's reply (optionally fenced) into a JSON object, or null. */
+export function parseSlotJson(raw) {
+    let txt = String(raw || '').trim();
+    txt = txt.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
     try {
-        parsed = JSON.parse(txt);
-    } catch (e) {
-        // Fallback: very defensive
-        return {
-            intent: 'generic',
-            course_code: null,
-            title_kw: null,
-            dept: null,
-            day: null,
-            date_iso: null,
-            time: null,
-            lecturer_name: null,
-        };
+        const parsed = JSON.parse(txt);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch {
+        // Some models add a sentence around the object: take the outermost braces.
+        const a = txt.indexOf('{');
+        const b = txt.lastIndexOf('}');
+        if (a !== -1 && b > a) {
+            try { return JSON.parse(txt.slice(a, b + 1)); } catch { /* fall through */ }
+        }
     }
+    return null;
+}
 
-    // ---- Normalisation ----
-    if (parsed?.course_code) {
-        parsed.course_code = String(parsed.course_code)
-            .toUpperCase()
-            .replace(/\s+/g, '');
-    } else {
-        parsed.course_code = null;
-    }
+/** Clean up whatever the model returned into a predictable slot object. */
+export function normalizeSlots(parsed) {
+    if (!parsed || typeof parsed !== 'object') return { ...EMPTY_SLOTS };
 
-    if (parsed?.day) {
-        parsed.day = String(parsed.day).slice(0, 3);
-    } else {
-        parsed.day = null;
-    }
+    const slots = { ...EMPTY_SLOTS };
+    slots.intent = INTENTS.has(parsed.intent) ? parsed.intent : 'generic';
+    slots.course_code = text(parsed.course_code).toUpperCase().replace(/\s+/g, '') || null;
+    slots.title_kw = text(parsed.title_kw) || null;
+    slots.dept = text(parsed.dept).toUpperCase() || null;
+    slots.day = toDay3(text(parsed.day)) || toDay3(text(parsed.day).slice(0, 3));
+    slots.venue = text(parsed.venue) || null;
+    slots.exam = parsed.exam === true || parsed.exam === 'true';
 
-    if (parsed?.title_kw) {
-        parsed.title_kw = String(parsed.title_kw).trim();
-    } else {
-        parsed.title_kw = null;
-    }
+    const date = text(parsed.date_iso);
+    slots.date_iso = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
 
-    if (parsed?.dept) {
-        parsed.dept = String(parsed.dept).toUpperCase();
-    } else {
-        parsed.dept = null;
-    }
+    const time = text(parsed.time).match(/^(\d{1,2}):(\d{2})$/);
+    slots.time = time ? `${time[1].padStart(2, '0')}:${time[2]}` : null;
 
-    if (parsed?.time) {
-        parsed.time = String(parsed.time).padStart(5, '0');
-    } else {
-        parsed.time = null;
-    }
-
-    if (parsed?.lecturer_name) {
-        // Strip common titles
-        let name = String(parsed.lecturer_name)
-            .replace(/\b(Mr|Mrs|Ms|Dr|Prof)\.?\s+/gi, '')
-            .trim();
-        parsed.lecturer_name = name || null;
-    } else {
-        parsed.lecturer_name = null;
-    }
+    // Strip common titles
+    slots.lecturer_name =
+        text(parsed.lecturer_name).replace(/\b(Mr|Mrs|Ms|Dr|Prof)\.?\s+/gi, '').trim() || null;
 
     // ---- UTG-specific mappings ----
     // Map "AI" / "Artificial Intelligence" / "Intelligent Systems" to CPS416
-    const titleUpper = (parsed.title_kw || '').toUpperCase();
-    if (!parsed.course_code && parsed.title_kw) {
+    const titleUpper = (slots.title_kw || '').toUpperCase();
+    if (!slots.course_code && slots.title_kw) {
         if (
             titleUpper === 'AI' ||
             titleUpper.includes('ARTIFICIAL INTELLIGENCE') ||
             titleUpper.includes('INTELLIGENT SYSTEMS')
         ) {
-            parsed.course_code = 'CPS416';
-            if (!parsed.dept) parsed.dept = 'CPS';
+            slots.course_code = 'CPS416';
+            if (!slots.dept) slots.dept = 'CPS';
         }
     }
 
-    return {
-        intent: parsed.intent || 'generic',
-        course_code: parsed.course_code,
-        title_kw: parsed.title_kw,
-        dept: parsed.dept,
-        day: parsed.day,
-        date_iso: parsed.date_iso || null,
-        time: parsed.time,
-        lecturer_name: parsed.lecturer_name,
-    };
+    return slots;
+}
+
+/**
+ * Extract slots for the latest question.
+ * `history` is the earlier turns ([{ role, text }]) so follow-ups can be resolved;
+ * `now` is { iso, weekday, time } in the campus timezone for relative days.
+ */
+export async function extractSlots(question, { history = [], now = null, signal } = {}) {
+    const lines = [];
+    if (now) lines.push(`Current date: ${now.weekday} ${now.iso}, time ${now.time}.`);
+    if (history.length) {
+        lines.push('Earlier turns of the conversation:');
+        for (const turn of history) {
+            const who = turn.role === 'assistant' ? 'Assistant' : 'User';
+            lines.push(`${who}: ${String(turn.text || '').slice(0, 600)}`);
+        }
+    }
+    lines.push(`Latest question: ${String(question || '')}`);
+
+    const reply = await complete(
+        [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: lines.join('\n') },
+        ],
+        { temperature: 0, signal },
+    );
+
+    return normalizeSlots(parseSlotJson(reply));
 }

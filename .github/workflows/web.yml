@@ -7,6 +7,7 @@ on:
 
 jobs:
   test:
+    name: web
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -21,3 +22,20 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+
+  server:
+    name: server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            ingest/package-lock.json
+      # The admin tests run the real ingest script, so both packages are needed
+      - run: npm --prefix ingest ci
+      - run: npm --prefix server ci
+      - run: npm --prefix server test

@@ -1,6 +1,7 @@
 # UTG Academic Assistant — Web UI
 
-This is the Vue 3 + Vite front‑end for the UTG Academic Assistant. It provides a lightweight chat interface to query the local timetable database exposed by the Node/Express server.
+The Vue 3 + Vite front end for the UTG Academic Assistant: student sign-in, a chat screen and an admin dashboard,
+built with Tailwind CSS v4 and [shadcn-vue](https://www.shadcn-vue.com/) components.
 
 ## Run
 
@@ -9,38 +10,47 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173
-
-## Features
-
-- Dark/Light theme toggle (with system preference fallback and persistence)
-- Router‑based navigation with a dedicated Admin route (`/admin`)
-- Streaming chat: the server sends the answer as Server‑Sent Events, and the UI shows it with a word-by-word typing effect
-- Controls:
-  - Copy any message (per‑message pill button)
-  - Edit your last question (moves text back to the input and removes last exchange)
-  - Stop streaming (AbortController)
-  - Keyboard: Enter to send, Shift+Enter for newline
+Open http://localhost:5173. The API (see the root README) must be running for answers.
 
 ## Config
 
-The API base defaults to `http://localhost:5051`. You can override via Vite env:
+The API base defaults to `http://localhost:5051`. Override it with a Vite env variable, for example in `.env.local`:
 
 ```
 VITE_API_BASE=http://localhost:5051
 ```
 
-Create a `.env` file in the project root or start with `VITE_API_BASE` in your shell.
+## Layout
+
+```
+src/
+├── api.js                 # All calls to the server, incl. the SSE stream parser
+├── composables/
+│   ├── useAuth.js         # The signed-in student and their session token
+│   ├── useChat.js         # The student's chats, saved in localStorage per student
+│   ├── useSpeech.js       # Voice input and read-aloud (Web Speech API)
+│   ├── useAdmin.js        # Admin session (in memory only) and data
+│   └── useTheme.js        # Light / dark / system
+├── lib/                   # Markdown rendering, display helpers, and export (text, .ics, .csv)
+├── components/
+│   ├── AppSidebar.vue     # New chat, recent chats, account menu
+│   ├── chat/              # Message, composer, and the schedule shown under an answer
+│   ├── admin/             # Sign-in, upload card, sources table
+│   └── ui/                # shadcn-vue components (generated; edit freely)
+└── views/                 # ChatView (/), AuthView (/login) and AdminView (/admin)
+```
+
+## Adding a shadcn-vue component
+
+```
+npx shadcn-vue@latest add dialog
+```
+
+Components are copied into `src/components/ui/` as plain `.vue` files. Theme colours are the CSS
+variables at the top of `src/style.css`.
 
 ## Tests
 
 ```
 npm test
 ```
-
-Vitest with Vue Test Utils and jsdom. `npm run test:watch` re-runs on save.
-
-## Notes
-
-- The Admin route is available at `/admin` but is not shown as a primary tab. Use the header link.
-- Theme selection is stored in `localStorage` under `theme` (values: `light`, `dark`, `system`).
