@@ -4,5 +4,6 @@ export async function parseDocxNotice(path){
   const { value } = await mammoth.extractRawText({ path });
   const text=value.split('\n').map(s=>s.trim()).filter(Boolean).join('\n');
   const today=new Date().toISOString().slice(0,10);
-  return [[today, base.replace(/\.docx$/,''), text, base]];
+  // [date, title, body]: the file name and semester are added by ingest.js
+  return [[today, base.replace(/\.docx$/i,''), text]];
 }

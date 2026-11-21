@@ -2,7 +2,7 @@
 // Mounted at /api/auth. The email address is confirmed with a six-digit code.
 import { Router } from 'express';
 import { z } from 'zod';
-import { db } from '../db/connect.js';
+import { accountsDb as db } from '../db/accounts.js';
 import { env } from '../env.js';
 import { HttpError, wrap } from '../errors.js';
 import { mailConfigured, sendMail } from '../auth/mailer.js';
@@ -21,6 +21,38 @@ const SESSION_TTL = 30 * 24 * 60 * MINUTE;
 const MAX_FAILED_LOGINS = 8;
 const LOCK_TIME = 15 * MINUTE;
 
+// ---------- email allowance ----------
+// A mail account has a daily sending limit, and nobody should be able to make
+// this server bombard an address. Counted per day, per address and in total.
+const today = () => new Date().toISOString().slice(0, 10);
+const mailCount = db.prepare(`SELECT count FROM mail_counters WHERE day = ? AND key = ?`);
+const mailBump = db.prepare(`
+  INSERT INTO mail_counters (day, key, count) VALUES (?, ?, 1)
+  ON CONFLICT(day, key) DO UPDATE SET count = count + 1`);
+const mailPrune = db.prepare(`DELETE FROM mail_counters WHERE day < ?`);
+
+// Sign-up emails can be triggered by anyone, for any address. They may use at
+// most this share of the day's allowance, so a flood of fake sign-ups cannot
+// stop people who already have an account from resetting a password.
+const SIGNUP_SHARE = 0.8;
+
+function reserveEmail(address, purpose) {
+    const day = today();
+    const sentTo = mailCount.get(day, address)?.count || 0;
+    const sentAll = mailCount.get(day, '*')?.count || 0;
+    if (sentTo >= env.MAIL_PER_ADDRESS_PER_DAY) {
+        throw new HttpError(429, 'Too many emails have been sent to that address today. Please try again tomorrow.');
+    }
+    const allowance = purpose === 'verify' ? Math.floor(env.MAIL_PER_DAY * SIGNUP_SHARE) : env.MAIL_PER_DAY;
+    if (sentAll >= allowance) {
+        console.error(`Daily email allowance reached (${env.MAIL_PER_DAY}): raise MAIL_PER_DAY or use a mail service with a higher limit.`);
+        throw new HttpError(503, 'We cannot send any more emails today. Please try again tomorrow.');
+    }
+    mailBump.run(day, address);
+    mailBump.run(day, '*');
+    if (sentAll === 0) mailPrune.run(day);
+}
+
 const BAD_CODE = 'That code is not right. Check the email and try again.';
 const BAD_LOGIN = 'Wrong email, matriculation number or password.';
 
@@ -37,7 +69,9 @@ const Email = z
     .email('Enter a valid email address');
 const StudentEmail = Email.refine((e) => domains.includes(e.split('@')[1]), {
     message: `Use your ${domainList} email address`,
-});
+})
+    // "name+anything@..." reaches the same mailbox, so it would let one person hold many accounts
+    .refine((e) => !e.split('@')[0].includes('+'), { message: 'Use your university address without a "+" in it' });
 const MatNumber = z.preprocess(
     (v) => String(v ?? '').replace(/\s+/g, '').toUpperCase(),
     z.string().regex(matPattern, 'That does not look like a matriculation number'),
@@ -121,6 +155,7 @@ async function sendCode(user, purpose) {
     const last = q.getCode.get(user.id, purpose);
     if (last && now - last.sent_at < RESEND_COOLDOWN) return null;
 
+    reserveEmail(user.email, purpose);
     const code = newCode();
     q.putCode.run(user.id, purpose, sha256(code), now, now + CODE_TTL);
     await sendMail({ to: user.email, ...EMAILS[purpose](code) });
@@ -159,6 +194,14 @@ auth.post(
             z.object({ mat_number: MatNumber, email: StudentEmail, password: Password }),
             req.body,
         );
+
+        // Where student addresses contain the matriculation number, the two must agree,
+        // so nobody can register someone else's number against their own mailbox.
+        // (the number must stand on its own in the address: "2221" is not found inside "22216789")
+        const inAddress = new RegExp(`(^|[^A-Z0-9])${mat_number.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^A-Z0-9])`);
+        if (env.MAT_IN_EMAIL && !inAddress.test(email.split('@')[0].toUpperCase())) {
+            throw new HttpError(400, 'The matriculation number does not match that email address.');
+        }
 
         const sameEmail = q.byEmail.get(email);
         const sameMat = q.byMat.get(mat_number);

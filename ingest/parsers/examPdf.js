@@ -38,6 +38,14 @@ const BANNER_RE =
 
 const COLUMNS = ['sn', 'code', 'title', 'lecturer', 'venue', 'invigilators', 'students'];
 
+// A timetable is a few hundred short words per page. These limits keep a huge
+// or hostile file from tying up the reader or storing a paragraph in a cell.
+const MAX_PAGES = 300;
+const MAX_WORDS_PER_PAGE = 6000;
+const MAX_WORD_LENGTH = 80;
+const MAX_CELL_LENGTH = 200;
+const MAX_WARNINGS = 60;
+
 /* ------------------------------------------------------------------ */
 /* 1. PDF -> words with positions                                      */
 /* ------------------------------------------------------------------ */
@@ -47,16 +55,18 @@ export async function readPdfWords(pathToPdf) {
     const pages = [];
     const pagerender = (pageData) =>
         pageData.getTextContent({ normalizeWhitespace: false, disableCombineTextItems: false }).then((content) => {
-            pages.push(
-                content.items
-                    .map((item) => ({
-                        s: String(item.str || '').trim(),
-                        x: item.transform[4],
-                        y: item.transform[5],
-                        w: Number(item.width) || 0,
-                    }))
-                    .filter((word) => word.s),
-            );
+            if (pages.length < MAX_PAGES + 1) {
+                pages.push(
+                    content.items
+                        .map((item) => ({
+                            s: String(item.str || '').replace(/\s+/g, ' ').trim().slice(0, MAX_WORD_LENGTH),
+                            x: Number(item.transform[4]) || 0,
+                            y: Number(item.transform[5]) || 0,
+                            w: Number(item.width) || 0,
+                        }))
+                        .filter((word) => word.s),
+                );
+            }
             return '';
         });
     await pdfParse(fs.readFileSync(pathToPdf), { pagerender });
@@ -75,6 +85,9 @@ function clock(hour, minute, half) {
         const pm = half.toLowerCase() === 'pm';
         if (h === 12) h = pm ? 12 : 0;
         else if (pm) h += 12;
+    } else if (!half && h >= 1 && h <= 6) {
+        // "2:00 - 4:00" with no am/pm: no exam sits at two in the morning
+        h += 12;
     }
     return h > 23 || m > 59 ? null : h * 60 + m;
 }
@@ -100,7 +113,8 @@ function findHeadings(words, page) {
         const start = clock(m[5], m[6], m[7]);
         let end = clock(m[8], m[9], m[10]);
         if (!month || start === null || end === null) continue;
-        // "11:00 - 1:00" means one o'clock in the afternoon
+        // "11:00 - 1:00" means one o'clock in the afternoon (already handled for 1 to 6;
+        // this covers anything else that would otherwise end before it starts)
         if (end <= start && end + 12 * 60 > start && end + 12 * 60 < 24 * 60) end += 12 * 60;
 
         const first = wordAt(m.index);
@@ -198,6 +212,7 @@ function findTableHeaders(words) {
             }
         }
         if (!invigilators) continue;
+        const invigilatorsAt = last;
         let students = null;
         for (let i = last + 1; i < words.length && i - last <= 4; i++) {
             const w = words[i];
@@ -207,7 +222,7 @@ function findTableHeaders(words) {
         }
 
         const between = words
-            .slice(t + 1, words.indexOf(invigilators))
+            .slice(t + 1, invigilatorsAt)
             .filter((w) => sameLine(w, title) && w.x > title.x && w.x < invigilators.x)
             .sort((a, b) => a.x - b.x);
         if (between.length < 2) continue;
@@ -229,11 +244,37 @@ function findTableHeaders(words) {
 }
 
 /**
+ * How far the header labels sit to the right of the text under them. In some
+ * tables every label is indented by the same amount; finding that amount lets
+ * each column's start be placed exactly, even when a cell's text does not
+ * overlap its label. It is the offset that lines up the most columns.
+ */
+function labelOffset(labels, bodyWords) {
+    const starts = COLUMNS.slice(1).map((c) => labels[c].x);
+    const xs = bodyWords.map((w) => w.x);
+    const candidates = new Set([0]);
+    for (const start of starts) {
+        for (const x of xs) {
+            const offset = start - x;
+            if (Math.abs(offset) <= 20) candidates.add(Math.round(offset * 2) / 2);
+        }
+    }
+    let best = { offset: 0, score: -1 };
+    for (const offset of candidates) {
+        const score = starts.filter((start) => xs.some((x) => Math.abs(start - offset - x) <= 1.5)).length;
+        if (score > best.score || (score === best.score && Math.abs(offset) < Math.abs(best.offset))) best = { offset, score };
+    }
+    // fewer than three columns agreeing is not evidence of anything
+    return best.score >= 3 ? best.offset : 0;
+}
+
+/**
  * Where each column starts, for one table on one page. Words never cross a
  * cell border, so a border must sit in a gap that no word covers; for each
- * column it is the last such gap before that column's label.
+ * column it is the last such gap before where that column's text starts.
  */
 function columnStarts(labels, bodyWords) {
+    const offset = labelOffset(labels, bodyWords);
     const spans = [...COLUMNS.map((c) => labels[c]), ...bodyWords]
         .map((w) => [w.x, w.x + Math.max(w.w, 1)])
         .sort((a, b) => a[0] - b[0]);
@@ -246,11 +287,11 @@ function columnStarts(labels, bodyWords) {
 
     const starts = [-Infinity];
     for (let c = 1; c < COLUMNS.length; c++) {
-        const label = labels[COLUMNS[c]];
-        const previous = labels[COLUMNS[c - 1]];
-        const fitting = gaps.filter(([from, to]) => to <= label.x + 1 && from >= previous.x);
+        const textStart = labels[COLUMNS[c]].x - Math.max(offset, 0);
+        const previous = labels[COLUMNS[c - 1]].x - Math.max(offset, 0);
+        const fitting = gaps.filter(([from, to]) => to <= textStart + 1.5 && from >= previous);
         const gap = fitting[fitting.length - 1];
-        starts.push(gap ? (gap[0] + gap[1]) / 2 : label.x - 3);
+        starts.push(gap ? (gap[0] + gap[1]) / 2 : textStart - 3);
     }
     return starts;
 }
@@ -269,9 +310,21 @@ const cleanText = (parts) =>
         .replace(/\b(Mr|Mrs|Ms|Dr|Prof)\.(?=[A-Za-z])/g, '$1. ') // "Mr.Abubacarr" -> "Mr. Abubacarr"
         .trim();
 
-/** Turn the words under a table header into rows, reading cell by cell. */
-function readRows(bodyWords, labels) {
-    if (!bodyWords.length) return [];
+const SERIAL = /^\d+[.)]?$/;
+const cell = (parts, warnings, what) => {
+    const text = cleanText(parts);
+    if (text.length <= MAX_CELL_LENGTH) return text;
+    warnings.push(`${what} was cut short: it is far longer than a table cell.`);
+    return text.slice(0, MAX_CELL_LENGTH);
+};
+
+/**
+ * Turn the words under a table header into rows, reading cell by cell.
+ * Returns { rows, orphans }: `orphans` are words that came before the first
+ * row and belong to none (stray text, or the tail of a row from the page before).
+ */
+function readRows(bodyWords, labels, warnings, page) {
+    if (!bodyWords.length) return { rows: [], orphans: [] };
     const starts = columnStarts(labels, bodyWords);
     const columnOf = (word) => {
         let c = 0;
@@ -280,41 +333,63 @@ function readRows(bodyWords, labels) {
     };
 
     const rows = [];
+    const orphans = [];
     let row = null;
-    const open = () => {
-        row = { sn: [], code: [], title: [], lecturer: [], venue: [], invigilators: [], students: [] };
+    const open = (word) => {
+        row = { y: word.y, top: word.y, sn: [], code: [], title: [], lecturer: [], venue: [], invigilators: [], students: [] };
         rows.push(row);
     };
     const pastNumber = () => row && COLUMNS.slice(1).some((c) => row[c].length);
+    const pastCode = () => row && COLUMNS.slice(2).some((c) => row[c].length);
 
-    for (const word of bodyWords) {
+    bodyWords.forEach((word, i) => {
         const column = COLUMNS[columnOf(word)];
-        if (column === 'sn' && /^\d+$/.test(word.s)) {
+        if (column === 'sn' && SERIAL.test(word.s)) {
             // a serial number starts a row; "1" then "0" on two lines is one number
-            if (!row || pastNumber()) open();
-            row.sn.push(word.s);
-            continue;
+            if (!row || pastNumber()) open(word);
+            row.sn.push(word.s.replace(/\D/g, ''));
+            return;
         }
-        if (!row) {
-            // words before the first row belong to no table (stray text on the page)
-            if (column === 'code' && /^([A-Z]{3,4}|[A-Z]{2,4}\d{3})$/.test(word.s)) open();
-            else continue;
-        }
-        row[column].push(word.s);
-    }
+        // A course code where the previous row is already past its own code starts a
+        // row too (a table with no serial numbers). "GEL" followed by "101" counts.
+        const next = bodyWords[i + 1];
+        const startsCode =
+            column === 'code' &&
+            (/^[A-Z]{2,4}\d{3}$/.test(word.s) ||
+                (/^[A-Z]{2,4}$/.test(word.s) && next && /^\d{3}$/.test(next.s) && COLUMNS[columnOf(next)] === 'code'));
+        if (startsCode && (!row || pastCode())) open(word);
 
-    return rows
-        .map((r) => ({
-            sn: r.sn.join(''),
-            code: cleanCode(r.code),
-            title: cleanText(r.title),
-            lecturer: cleanText(r.lecturer),
-            venue: cleanText(r.venue),
-            invigilators: cleanText(r.invigilators),
-            // a number too long for its cell wraps: "28" over "4" is 284
-            students: r.students.join('').replace(/\D/g, ''),
-        }))
-        .filter((r) => r.code || r.title);
+        if (!row) {
+            orphans.push(word);
+            return;
+        }
+        // A cell has a few lines at most. Anything far below the row (a page number,
+        // a footer, a note under the table) is not part of it.
+        if (word.y < row.top - 60 || word.y > row.top + 25) {
+            orphans.push(word);
+            return;
+        }
+        row.top = Math.max(row.top, word.y);
+        row[column].push(word.s);
+    });
+
+    const where = (r) => `Page ${page}, exam no. ${r.sn.join('') || '?'}`;
+    return {
+        orphans,
+        rows: rows
+            .map((r) => ({
+                y: r.y,
+                sn: r.sn.join(''),
+                code: cleanCode(r.code).slice(0, 40),
+                title: cell(r.title, warnings, `${where(r)}: the title`),
+                lecturer: cell(r.lecturer, warnings, `${where(r)}: the lecturer`),
+                venue: cell(r.venue, warnings, `${where(r)}: the venue`),
+                invigilators: cell(r.invigilators, warnings, `${where(r)}: the invigilators`),
+                // a number too long for its cell wraps: "28" over "4" is 284
+                students: r.students.join('').replace(/\D/g, '').slice(0, 6),
+            }))
+            .filter((r) => r.code || r.title),
+    };
 }
 
 /* ------------------------------------------------------------------ */
@@ -322,25 +397,61 @@ function readRows(bodyWords, labels) {
 /* ------------------------------------------------------------------ */
 
 /**
+ * A line between y = `from` and y = `to` that looks like a session heading (a
+ * weekday and a number) but was not read as one: for telling the admin what
+ * the reader could not understand.
+ */
+function headingLikeLine(words, from, to) {
+    const lines = new Map();
+    for (const word of words) {
+        if (word.used || word.y <= from || word.y >= to) continue;
+        const key = Math.round(word.y);
+        const line = lines.get(key) || lines.get(key - 1) || lines.get(key + 1);
+        if (line) line.push(word);
+        else lines.set(key, [word]);
+    }
+    for (const line of lines.values()) {
+        const text = line.map((w) => w.s).join(' ').slice(0, 120);
+        if (/\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b/i.test(text) && /\d/.test(text) && line.length <= 14) return text;
+    }
+    return null;
+}
+
+// Words too small to be the tail of a split row: ordinal endings set as superscripts
+const SUPERSCRIPT = /^(st|nd|rd|th)$/i;
+
+/**
  * Words with positions (one list per page) -> exams.
  * Returns { exams: [{ page, sn, code, title, lecturer, venue, invigilators, students, date, start, end, session }], warnings }.
  */
-export function parseExamWords(pages) {
+export function parseExamWords(sourcePages) {
     const warnings = [];
+    let pages = sourcePages;
+    if (pages.length > MAX_PAGES) {
+        warnings.push(`Only the first ${MAX_PAGES} pages were read (the file has more).`);
+        pages = pages.slice(0, MAX_PAGES);
+    }
+
     const layout = pages.map((source, index) => {
-        const words = source.map((w) => ({ ...w }));
+        let words = source.map((w) => ({ ...w }));
+        if (words.length > MAX_WORDS_PER_PAGE) {
+            warnings.push(`Page ${index + 1} has far more text than a timetable page; only the first ${MAX_WORDS_PER_PAGE} words were read.`);
+            words = words.slice(0, MAX_WORDS_PER_PAGE);
+        }
         const headings = findHeadings(words, index + 1);
 
         // drop banner lines such as "WEEK 2 (...)" and "NO EXAMS"
-        const lines = [];
+        const lines = new Map(); // rounded y -> words on that line
         for (const word of words) {
             if (word.used) continue;
-            const line = lines.find((l) => Math.abs(l[0].y - word.y) <= 1.5);
+            const key = Math.round(word.y);
+            const line = lines.get(key) || lines.get(key - 1) || lines.get(key + 1);
             if (line) line.push(word);
-            else lines.push([word]);
+            else lines.set(key, [word]);
         }
-        for (const line of lines) {
-            if (BANNER_RE.test(line.map((w) => w.s).join(' '))) for (const w of line) w.used = 'banner';
+        for (const line of lines.values()) {
+            const text = line.map((w) => w.s).join(' ');
+            if (text.length <= 400 && BANNER_RE.test(text)) for (const w of line) w.used = 'banner';
         }
 
         return { words, headings, headers: findTableHeaders(words) };
@@ -355,37 +466,77 @@ export function parseExamWords(pages) {
     layout.forEach(({ words, headings, headers }, index) => {
         const page = index + 1;
         const free = (from, to) => words.slice(from, to).filter((w) => !w.used);
-        const add = (bodyWords) => {
+
+        /**
+         * Read one stretch of table text. `below` is the y of the header row it sits
+         * under on this page (Infinity for rows carried over from the page before).
+         */
+        const add = (bodyWords, below) => {
             if (!table || !bodyWords.length) return;
-            const rows = readRows(bodyWords, table.labels);
-            if (rows.length && !table.heading) {
-                warnings.push(`Page ${page}: ${rows.length} row(s) have no dated heading above them and were left out.`);
-                return;
+            const { rows, orphans } = readRows(bodyWords, table.labels, warnings, page);
+
+            // Text before the first row of a carried-over table may be the tail of a row
+            // that was split by the page break. It cannot be re-attached safely, so say so.
+            const stray = orphans.filter((w) => !SUPERSCRIPT.test(w.s) && rows.length && w.y > rows[0].y);
+            if (below === Infinity && stray.length) {
+                warnings.push(
+                    `Page ${page} starts with text that is not part of a row ("${stray.slice(0, 6).map((w) => w.s).join(' ')}"). ` +
+                        `If a row was split across the page break, check the last exam on page ${page - 1}.`,
+                );
             }
-            if (rows.length && !table.heading.date) return;
+
+            let dropped = 0;
+            const noted = new Set();
             for (const row of rows) {
-                exams.push({
-                    page,
-                    ...row,
-                    date: table.heading.date,
-                    start: table.heading.start,
-                    end: table.heading.end,
-                    session: table.heading.label,
-                });
+                // A dated heading between the header row and this row means a table whose
+                // own header row was not recognised: its rows belong to that heading.
+                const between = headings.filter((h) => h.y > row.y && h.y < below).sort((a, b) => a.y - b.y)[0];
+                const heading = between || table.heading;
+                if (between && between !== table.heading && !noted.has(between)) {
+                    noted.add(between);
+                    warnings.push(
+                        `Page ${page}: the table under "${between.label}" has no header row the reader recognises. ` +
+                            'Its rows were read using the columns of the table above; check them.',
+                    );
+                }
+                if (!heading || !heading.date) {
+                    dropped++;
+                    continue;
+                }
+                const { y, ...fields } = row;
+                exams.push({ page, ...fields, date: heading.date, start: heading.start, end: heading.end, session: heading.label });
+            }
+            if (dropped && !table.heading) {
+                warnings.push(`Page ${page}: ${dropped} row(s) have no dated heading the reader could read above them and were left out.`);
             }
         };
 
         // rows before the first header carry on the table from the previous page
-        add(free(0, headers.length ? headers[0].first : words.length));
+        add(free(0, headers.length ? headers[0].first : words.length), Infinity);
 
         headers.forEach((header, h) => {
-            // the heading for a table is the nearest one above it on the page
+            // The heading for a table is the nearest one above it on the page - unless
+            // another table sits between them, in which case that heading is not its own.
             const above = headings.filter((x) => x.y > header.y).sort((a, b) => a.y - b.y)[0];
-            const heading = above || waiting || null;
-            if (!heading) warnings.push(`Page ${page}: a table has no dated heading above it.`);
+            const previousHeader = headers.filter((other) => other.y > header.y).sort((a, b) => a.y - b.y)[0];
+            const taken = above && previousHeader && previousHeader.y < above.y;
+            // text above this table that looks like a dated heading but could not be read
+            const unread = headingLikeLine(words, header.y, previousHeader ? previousHeader.y : Infinity);
+
+            let heading = null;
+            if (above && !taken) heading = above;
+            else if (!above && waiting) heading = waiting; // its heading was at the foot of the page before
+            else if (!above && h === 0 && table && !unread) heading = table.heading; // the header row repeated after a page break
             if (heading === waiting) waiting = null;
+            if (!heading) {
+                warnings.push(
+                    `Page ${page}: a table has no dated heading the reader could read above it` +
+                        (unread ? ` (it could not read "${unread}")` : '') +
+                        '. Its rows were left out rather than given the wrong date.',
+                );
+            }
             table = { labels: header.labels, heading };
-            add(free(header.last + 1, h + 1 < headers.length ? headers[h + 1].first : words.length));
+            add(free(header.last + 1, h + 1 < headers.length ? headers[h + 1].first : words.length), header.y);
         });
 
         // a heading below every table on the page is waiting for the next page's table
@@ -404,6 +555,11 @@ export function parseExamWords(pages) {
     }
     for (const exam of exams) {
         if (!exam.code) warnings.push(`Page ${exam.page}: "${exam.title}" (no. ${exam.sn || '?'}) has no course code in the file.`);
+    }
+    if (warnings.length > MAX_WARNINGS) {
+        const extra = warnings.length - MAX_WARNINGS;
+        warnings.length = MAX_WARNINGS;
+        warnings.push(`...and ${extra} more notes like these.`);
     }
     return { exams, warnings };
 }

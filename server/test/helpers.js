@@ -84,6 +84,8 @@ export async function setup() {
         NODE_ENV: 'test',
         DATA_DIR: path.join(dir, 'data'),
         DB_PATH: path.join(dir, 'utg.db'),
+        ACCOUNTS_DB_PATH: path.join(dir, 'accounts.db'),
+        BACKUP_DIR: path.join(dir, 'backups'),
         GROQ_API_KEY: 'test-key',
         GROQ_BASE_URL: stub.url,
         ADMIN_USER: 'admin',
@@ -98,11 +100,17 @@ export async function setup() {
         MAT_NUMBER_PATTERN: '^[A-Z0-9]{5,12}$',
         // tests ask far more questions than one student would
         CHAT_PER_MINUTE: '1000',
+        // answers are not reused between tests; the caching test switches it on itself
+        ANSWER_CACHE_SECONDS: '0',
+        ADMIN_USERS: 'second-admin:another-test-pass',
+        AUTH_PER_15_MIN: '100000',
+        MAIL_PER_ADDRESS_PER_DAY: '5',
         CHAT_PER_DAY: '100000',
     });
 
     const { createApp } = await import('../src/app.js');
     const { db } = await import('../src/db/connect.js');
+    const { accountsDb } = await import('../src/db/accounts.js');
 
     const insert = db.prepare(`
       INSERT INTO timetable (dept,course_code,course_title,day,start_time,end_time,venue,lecturer,source_file,semester)
@@ -118,10 +126,10 @@ export async function setup() {
 
     // A signed-in student for the tests that are not about signing in
     const token = crypto.randomBytes(24).toString('base64url');
-    const userId = db
+    const userId = accountsDb
         .prepare(`INSERT INTO users (mat_number, email, password_hash, verified_at, created_at) VALUES ('22216000', 'seed@utg.edu', 'x', ?, ?)`)
         .run(Date.now(), Date.now()).lastInsertRowid;
-    db.prepare(`INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`)
+    accountsDb.prepare(`INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`)
         .run(crypto.createHash('sha256').update(token).digest('hex'), userId, Date.now(), Date.now() + 3600_000);
     const student = { Authorization: `Bearer ${token}` };
 
@@ -137,6 +145,7 @@ export async function setup() {
         base,
         stub,
         db,
+        accountsDb,
         dir,
         dataDir: process.env.DATA_DIR,
         auth,
@@ -153,6 +162,7 @@ export async function setup() {
             await new Promise((resolve) => server.close(resolve));
             await stub.close();
             db.close();
+            accountsDb.close();
             fs.rmSync(dir, { recursive: true, force: true });
         },
     };

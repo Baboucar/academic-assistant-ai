@@ -198,20 +198,6 @@ export function normalizeSlots(parsed) {
     slots.lecturer_name =
         text(parsed.lecturer_name).replace(/\b(Mr|Mrs|Ms|Dr|Prof)\.?\s+/gi, '').trim() || null;
 
-    // ---- UTG-specific mappings ----
-    // Map "AI" / "Artificial Intelligence" / "Intelligent Systems" to CPS416
-    const titleUpper = (slots.title_kw || '').toUpperCase();
-    if (!slots.course_code && slots.title_kw) {
-        if (
-            titleUpper === 'AI' ||
-            titleUpper.includes('ARTIFICIAL INTELLIGENCE') ||
-            titleUpper.includes('INTELLIGENT SYSTEMS')
-        ) {
-            slots.course_code = 'CPS416';
-            if (!slots.dept) slots.dept = 'CPS';
-        }
-    }
-
     return slots;
 }
 

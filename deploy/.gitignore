@@ -1,0 +1,2 @@
+# The filled-in settings file holds secrets. Only the .example is committed.
+.env.production

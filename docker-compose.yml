@@ -1,0 +1,91 @@
+# One machine: the API, with Caddy in front for HTTPS and the web app's files.
+# Step-by-step instructions: docs/DEPLOY.md
+#
+# Before the first start you need two files (neither is committed to git):
+#   .env                      one line:  SITE_DOMAIN=assistant.example.edu
+#   deploy/.env.production    the API's settings and secrets
+#                             (copy deploy/.env.production.example and fill it in)
+#
+# Nightly backup of both databases at 02:00. Add this one line with "crontab -e"
+# on the server, with the path changed to where you cloned the repository:
+#   0 2 * * * cd /opt/academic-assistant-ai && docker compose exec -T api npm run backup >> "$HOME/utg-backup.log" 2>&1
+
+# Fixed project name, so the volumes are always called utg-assistant_<name>
+# whatever the folder is called.
+name: utg-assistant
+
+services:
+  api:
+    build:
+      context: .
+      args:
+        # Optional. Shown in /api/health so you can see which version is running:
+        #   GIT_SHA=$(git rev-parse --short HEAD) docker compose build api
+        GIT_SHA: ${GIT_SHA:-}
+    image: utg-assistant-api
+    restart: unless-stopped
+    # Passes the stop signal on to Node so "docker compose stop" is quick and clean.
+    init: true
+    env_file:
+      - deploy/.env.production
+    # Not published on the host: only Caddy talks to the API.
+    expose:
+      - "5051"
+    volumes:
+      - data:/app/state/data
+      - db:/app/state/db
+      - accounts:/app/state/accounts
+      - backups:/app/state/backups
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SITE_DOMAIN: "${SITE_DOMAIN:?Create a .env file next to docker-compose.yml with a line like SITE_DOMAIN=assistant.example.edu}"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # The built web app. Filled by "docker compose run --rm web-build".
+      - ./web/dist:/srv:ro
+      # Certificates. Keep this volume: losing it means asking for new certificates,
+      # and the certificate authority limits how often you can do that.
+      - caddy_data:/data
+      - caddy_config:/config
+    logging: *logging
+
+  # Builds the web app into web/dist. Not started by "docker compose up".
+  # Run it once before the first start and again after each update:
+  #   docker compose run --rm web-build
+  # The API address is fixed into the files at build time, so rebuild if the
+  # domain changes.
+  web-build:
+    image: node:22-bookworm-slim
+    profiles: ["build"]
+    working_dir: /web
+    environment:
+      VITE_API_BASE: "https://${SITE_DOMAIN:?Create a .env file next to docker-compose.yml with a line like SITE_DOMAIN=assistant.example.edu}"
+    volumes:
+      - ./web:/web
+    command: sh -c "npm ci && npm run build"
+
+volumes:
+  # Uploaded timetable files. Keep.
+  data:
+  # Timetable database. Can be rebuilt from the files in "data".
+  db:
+  # Student accounts and sessions. Cannot be rebuilt. Back up.
+  accounts:
+  # Dated copies of both databases, written by "npm run backup".
+  backups:
+  caddy_data:
+  caddy_config:

@@ -59,8 +59,11 @@ test('normalizeSlots survives a missing or non-object reply', () => {
     assert.equal(normalizeSlots('nope').day, null);
 });
 
-test('AI maps to the UTG course code', () => {
+test('no course code or department is invented for an acronym', () => {
+    // "AI" used to be mapped to CPS416 in code; in the real exam timetable it is CPS 313.
+    // Names for a course are data now (see the aliases table), never a guessed code.
     const slots = normalizeSlots({ title_kw: 'AI' });
-    assert.equal(slots.course_code, 'CPS416');
-    assert.equal(slots.dept, 'CPS');
+    assert.equal(slots.title_kw, 'AI');
+    assert.equal(slots.course_code, null);
+    assert.equal(slots.dept, null);
 });

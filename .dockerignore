@@ -1,0 +1,22 @@
+# What "docker build" is allowed to see. Used by ./Dockerfile.
+#
+# Start from nothing and let in only the two packages the API needs.
+# This keeps secrets (server/.env), timetable files (data/) and databases
+# (tmp/, var/, backups/) out of the image, and keeps the build fast.
+*
+!server
+!ingest
+
+# Installed inside the image for Linux; the copies on your computer must not go in.
+**/node_modules
+
+# Settings and secrets are given to the container when it starts, never baked in.
+**/.env
+**/.env.*
+
+# Not needed to run the API.
+server/test
+**/*.db
+**/*.db-*
+**/*.log
+**/.DS_Store

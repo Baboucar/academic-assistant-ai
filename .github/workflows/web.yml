@@ -1,4 +1,4 @@
-name: Web tests
+name: Tests
 
 on:
   push:
@@ -39,3 +39,35 @@ jobs:
       - run: npm --prefix ingest ci
       - run: npm --prefix server ci
       - run: npm --prefix server test
+      # the evaluation harness itself, with a fake model: no key, no allowance used
+      - run: node scripts/eval.js --stub --limit 5
+        working-directory: server
+      - run: node scripts/eval.js --list
+        working-directory: server
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run lint
+
+  image:
+    name: docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Proves the API image builds (including the native SQLite module) and starts
+      - run: docker build -t utg-assistant-api .
+      - run: |
+          docker run -d --name api --init -p 5051:5051 -e NODE_ENV=development utg-assistant-api
+          for i in $(seq 1 20); do curl -fsS http://127.0.0.1:5051/api/health && exit 0; sleep 2; done
+          docker logs api
+          exit 1
+      - run: docker run --rm -e SITE_DOMAIN=localhost -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2 caddy validate --config /etc/caddy/Caddyfile

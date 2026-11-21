@@ -42,11 +42,14 @@ const allowedTypes = computed(() => TYPES_BY_EXT[extension.value] || Object.keys
 
 // Keep the type valid for the chosen file; guess "calendar" or "exams" from the name like the ingest does
 watch(file, (f) => {
+  // an offer to replace anyway belongs to the file that was refused, not to the next one chosen
+  if (lastResult.value?.refused && f !== lastResult.value.upload) lastResult.value = null;
   if (!f) return;
   const allowed = allowedTypes.value;
   if (allowed.includes('calendar') && /calendar/i.test(f.name)) type.value = 'calendar';
   else if (allowed.includes('exams') && /exam/i.test(f.name)) type.value = 'exams';
-  else if (!allowed.includes(type.value)) type.value = allowed[0];
+  // otherwise start from the usual type, not whatever the previous file was
+  else type.value = allowed.includes('timetable') ? 'timetable' : allowed[0];
 });
 
 function choose(f) {
@@ -74,7 +77,7 @@ function onDrop(e) {
   choose(e.dataTransfer?.files?.[0]);
 }
 
-async function submit() {
+async function submit(event, { force = false } = {}) {
   if (!file.value || uploading.value) return;
   uploading.value = true;
   error.value = '';
@@ -85,7 +88,26 @@ async function submit() {
       semester: semester.value.trim(),
       dept: hasDept.value ? dept.value.trim() : '',
       reingest: ingestNow.value,
+      force,
     });
+    if (result.kept_previous) {
+      // The new version read (almost) nothing, so the server kept the old one.
+      // The file stays selected so it can be sent again with "Replace anyway".
+      const why = (result.ingest?.log || '').split('\n').find((l) => l.startsWith('Refused:'));
+      const reason = (why || '').replace(/^Refused:\s*\S+\s*->\s*/, '');
+      lastResult.value = {
+        file: result.file,
+        rows: result.rows ?? null,
+        notes: [],
+        // a full sentence either way
+        refused: reason ? `The server ${reason}` : 'The new version could not be read, so the one already loaded was kept.',
+        // "Replace anyway" is only offered when the server would accept it, and only for this very file
+        canForce: Boolean(reason),
+        upload: file.value,
+      };
+      toast.warning(`${result.file} was not replaced`, { description: 'The version already loaded was kept. See the note under the form.', duration: 10000 });
+      return;
+    }
     if (result.ingest && !result.ingest.ok) {
       toast.error(`Uploaded ${result.file}, but it could not be read`, {
         description: result.ingest.log?.split('\n').find((l) => /fail|error/i.test(l)) || 'Check the file format and try re-ingesting.',
@@ -170,11 +192,23 @@ async function submit() {
         <div
           v-if="lastResult"
           class="rounded-lg border px-3 py-2.5 text-sm"
-          :class="lastResult.rows === 0 ? 'border-destructive/40 bg-destructive/5' : 'bg-muted/40'"
+          :class="lastResult.rows === 0 || lastResult.refused ? 'border-destructive/40 bg-destructive/5' : 'bg-muted/40'"
           role="status"
           data-testid="upload-result"
         >
-          <p class="font-medium [overflow-wrap:anywhere]">
+          <template v-if="lastResult.refused">
+            <p class="font-medium [overflow-wrap:anywhere]">{{ lastResult.file }} was not replaced</p>
+            <p class="mt-1 text-muted-foreground">{{ lastResult.refused }}</p>
+            <Button
+              v-if="lastResult.canForce"
+              type="button" variant="outline" size="sm" class="mt-2.5"
+              :disabled="uploading || file !== lastResult.upload"
+              @click="submit(null, { force: true })"
+            >
+              Replace anyway
+            </Button>
+          </template>
+          <p v-else class="font-medium [overflow-wrap:anywhere]">
             {{ lastResult.file }}:
             {{ lastResult.rows === null ? 'ingested' : lastResult.rows === 0 ? 'nothing could be read' : `${plural(lastResult.rows, 'row')} read` }}
           </p>

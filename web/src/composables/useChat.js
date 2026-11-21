@@ -42,6 +42,8 @@ function cleanMessages(list) {
             schedule: Boolean(m.schedule),
             // choices offered when the assistant asked "which department?"
             choices: Array.isArray(m.choices) ? m.choices.filter((c) => typeof c === 'string') : [],
+            // the AI model was unavailable, so the answer was put together from the rows alone
+            degraded: Boolean(m.degraded),
             error: m.error || '',
         }));
 }
@@ -147,8 +149,8 @@ async function send(question) {
     conversation.updatedAt = Date.now();
 
     const history = historyFor(conversation.messages);
-    conversation.messages.push({ id: newId(), role: 'user', text, status: 'done', sources: [], filters: null, schedule: false, choices: [], error: '' });
-    conversation.messages.push({ id: newId(), role: 'assistant', text: '', status: 'pending', sources: [], filters: null, schedule: false, choices: [], error: '' });
+    conversation.messages.push({ id: newId(), role: 'user', text, status: 'done', sources: [], filters: null, schedule: false, choices: [], degraded: false, error: '' });
+    conversation.messages.push({ id: newId(), role: 'assistant', text: '', status: 'pending', sources: [], filters: null, schedule: false, choices: [], degraded: false, error: '' });
     const answer = conversation.messages[conversation.messages.length - 1];
 
     busy.value = true;
@@ -166,6 +168,7 @@ async function send(question) {
                     answer.filters = meta.filters || null;
                     answer.schedule = Boolean(meta.schedule);
                     answer.choices = meta.clarify?.options || [];
+                    answer.degraded = Boolean(meta.degraded);
                 },
                 onChunk: (chunk) => {
                     answer.status = 'streaming';
@@ -179,6 +182,7 @@ async function send(question) {
             answer.filters = res.filters || null;
             answer.schedule = Boolean(res.schedule);
             answer.choices = res.clarify?.options || [];
+            answer.degraded = Boolean(res.degraded);
         }
         if (!answer.text.trim()) answer.text = 'I could not find it.';
         answer.status = 'done';

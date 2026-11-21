@@ -1,6 +1,6 @@
 // server/src/middleware/adminAuth.js
 import crypto from 'node:crypto';
-import { env } from '../env.js';
+import { admins } from '../env.js';
 
 function parseBasicAuth(header) {
   if (!header || !header.startsWith('Basic ')) return null;
@@ -23,7 +23,8 @@ function safeEqual(a, b) {
 
 export function adminAuth(req, res, next) {
   // Require credentials to be configured
-  if (!env.ADMIN_USER || !env.ADMIN_PASS) {
+  const known = admins();
+  if (!known.length) {
     return res.status(503).json({ error: 'Admin is not configured. Set ADMIN_USER and ADMIN_PASS in server/.env' });
   }
 
@@ -33,8 +34,15 @@ export function adminAuth(req, res, next) {
   if (!creds) {
     return res.status(401).json({ error: 'Authentication required' });
   }
-  const userOk = safeEqual(creds.user, env.ADMIN_USER);
-  const passOk = safeEqual(creds.pass, env.ADMIN_PASS);
-  if (userOk && passOk) return next();
-  return res.status(401).json({ error: 'Invalid username or password' });
+  // check every admin, without stopping early, so timing does not reveal which name exists
+  let match = null;
+  for (const admin of known) {
+    const userOk = safeEqual(creds.user, admin.user);
+    const passOk = safeEqual(creds.pass, admin.pass);
+    if (userOk && passOk) match = admin;
+  }
+  if (!match) return res.status(401).json({ error: 'Invalid username or password' });
+  // who is signed in, for the admin log
+  req.admin = match.user;
+  return next();
 }

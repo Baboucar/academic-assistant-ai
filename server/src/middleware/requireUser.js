@@ -1,5 +1,5 @@
 // Requires a signed-in student: "Authorization: Bearer <session token>".
-import { db } from '../db/connect.js';
+import { accountsDb as db } from '../db/accounts.js';
 import { sha256 } from '../auth/crypto.js';
 
 const findSession = db.prepare(`

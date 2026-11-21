@@ -33,3 +33,12 @@ Thumbs.db
 # Put your own files in data/ and run the ingest; nothing in data/ is committed.
 data/*
 !data/.gitkeep
+
+# accounts database and backups (never commit)
+var/
+backups/
+
+# evaluation results saved while comparing runs
+tmp/*.json
+# production settings (the example file next to it is kept)
+deploy/.env.production

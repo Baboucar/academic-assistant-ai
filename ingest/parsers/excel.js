@@ -1,21 +1,4 @@
 import xlsx from 'xlsx';
-export function parseExcelTimetable(path, deptGuess='UNKNOWN'){
-  const wb=xlsx.readFile(path); const sheet=wb.Sheets[wb.SheetNames[0]];
-  const rows=xlsx.utils.sheet_to_json(sheet,{defval:''}); const out=[];
-  for(const r of rows){
-    const cc=r.course_code||r.Course||r['Course Code']||r['course']||'';
-    const title=r.course_title||r.Title||r['Course Title']||'';
-    const day=r.day||r.Day||''; const s=r.start_time||r.Start||r['Start']||'';
-    const e=r.end_time||r.End||r['End']||''; const venue=r.venue||r.Room||r.Hall||'';
-    const lec=r.lecturer||r.Instructor||r.Teacher||'';
-    if(cc && day && s && e){
-      out.push([deptGuess,String(cc).trim(),String(title).trim(),String(day).trim(),
-                String(s).trim(),String(e).trim(),String(venue).trim(),String(lec).trim()]);
-    }
-  }
-  return out;
-}
-
 // ---------------------------------------------------------------------------
 // Exam timetables
 // ---------------------------------------------------------------------------
@@ -141,6 +124,61 @@ export function parseExcelExams(path, deptGuess = 'UNKNOWN') {
       }
 
       out.push([cell(pick('dept')).toUpperCase() || deptGuess, code, title, date, start || '', end || '', cell(pick('venue')), cell(pick('lecturer'))]);
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Class timetables
+// ---------------------------------------------------------------------------
+
+const CLASS_COLUMNS = {
+  code: ['coursecode', 'code', 'course', 'courseno'],
+  title: ['coursetitle', 'title', 'coursename', 'name', 'subject'],
+  day: ['day', 'days', 'weekday'],
+  start: ['starttime', 'start', 'from', 'begins', 'timestart'],
+  end: ['endtime', 'end', 'to', 'finish', 'ends', 'timeend'],
+  time: ['time', 'period', 'session'],
+  venue: ['venue', 'room', 'hall', 'location', 'place'],
+  lecturer: ['lecturer', 'instructor', 'teacher', 'courselecturer'],
+  dept: ['dept', 'department', 'programme', 'program', 'school'],
+};
+
+/**
+ * Read a class timetable spreadsheet (every sheet).
+ * Returns rows of [dept, course_code, course_title, day, start_time, end_time, venue, lecturer].
+ * Values are returned as they are in the file (a time may be an Excel number);
+ * ingest/check.js puts them into one form and rejects what cannot be used.
+ * Rows with neither a course code nor a title (blank lines, notes) are skipped.
+ */
+export function parseExcelTimetable(path, deptGuess = 'UNKNOWN') {
+  const wb = xlsx.readFile(path);
+  const out = [];
+  for (const sheetName of wb.SheetNames) {
+    const rows = xlsx.utils.sheet_to_json(wb.Sheets[sheetName], { defval: '' });
+    for (const raw of rows) {
+      const byKey = {};
+      for (const [k, v] of Object.entries(raw)) byKey[k.toLowerCase().replace(/[^a-z0-9]/g, '')] = v;
+      const pick = (field) => {
+        for (const name of CLASS_COLUMNS[field]) {
+          if (byKey[name] !== undefined && cell(byKey[name]) !== '') return byKey[name];
+        }
+        return '';
+      };
+
+      const code = cell(pick('code'));
+      const title = cell(pick('title'));
+      if (!code && !title) continue;
+
+      let start = pick('start');
+      let end = pick('end');
+      if (cell(start) === '') {
+        const [a, b] = toTimeRange(pick('time'));
+        start = a || '';
+        if (cell(end) === '') end = b || '';
+      }
+      out.push([cell(pick('dept')).toUpperCase() || deptGuess, code, title, pick('day'), start, end, cell(pick('venue')), cell(pick('lecturer'))]);
     }
   }
   return out;

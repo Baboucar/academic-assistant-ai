@@ -180,7 +180,7 @@ Before submitting a PR:
     * server API
     * front-end UI
 5. Use descriptive commit messages
-6. Run the tests: `npm --prefix web test` and `npm --prefix server test`
+6. Run the checks: `npm install` once at the repository root, then `npm run lint` and `npm test` (both test suites)
 7. Manually verify:
    - Chat streaming works (send a question, try Stop)
    - Copy/Edit buttons behave as expected

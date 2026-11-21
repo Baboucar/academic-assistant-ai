@@ -2,7 +2,9 @@
 import { computed, ref } from 'vue';
 import { LoaderCircle, LogOut, RefreshCw } from '@lucide/vue';
 import { toast } from 'vue-sonner';
+import ActivityCard from '@/components/admin/ActivityCard.vue';
 import AdminLogin from '@/components/admin/AdminLogin.vue';
+import SettingsCard from '@/components/admin/SettingsCard.vue';
 import SourcesTable from '@/components/admin/SourcesTable.vue';
 import UploadCard from '@/components/admin/UploadCard.vue';
 import { Button } from '@/components/ui/button';
@@ -68,6 +70,10 @@ async function reingestAll() {
 
       <SourcesTable />
       <UploadCard />
+      <div class="grid items-start gap-6 lg:grid-cols-2">
+        <SettingsCard />
+        <ActivityCard />
+      </div>
     </div>
   </div>
 </template>

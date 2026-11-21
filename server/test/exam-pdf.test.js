@@ -130,3 +130,140 @@ test('a page with no timetable on it gives no rows', () => {
     const notes = [line(700, 72, 'NOTES for Students: (1st to 19 th Dec.2026)'), line(680, 72, '1. Students must come along with valid identification.')].flat();
     assert.deepEqual(parseExamWords([notes]), { exams: [], warnings: [] });
 });
+
+// ---- files that are not as tidy as the real one ----
+
+const read = (...pages) => parseExamWords(pages);
+const one = (cells) => ({ invigilators: 'All', students: '10', venue: 'Theater', lecturer: 'Mr. Kebba Sowe', ...cells });
+
+test('afternoon sessions written without am/pm are not stored as the small hours', () => {
+    const { exams } = read([
+        ...line(660, 144, 'Monday 7th December 2026 2:00 - 4:00'),
+        ...line(500, 144, 'Monday 7th December 2026 9:00 - 1:00'),
+        ...header(630),
+        ...row(597, one({ sn: '1', code: 'ICT 101', title: 'Introduction to ICT' })),
+        ...header(480),
+        ...row(450, one({ sn: '2', code: 'ICT 102', title: 'Computing' })),
+    ]);
+    assert.deepEqual(exams.map((e) => [e.start, e.end]), [['14:00', '16:00'], ['09:00', '13:00']]);
+});
+
+test('a heading it cannot read leaves the table out, instead of giving it the previous date', () => {
+    const { exams, warnings } = read([
+        ...line(660, 144, 'Monday 7th December 2026 9:00 - 11:00'),
+        ...line(500, 144, 'Tues 8/12/26 from nine'), // not a form the reader knows
+        ...header(630),
+        ...row(597, one({ sn: '1', code: 'ICT 101', title: 'Introduction to ICT' })),
+        ...header(480),
+        ...row(450, one({ sn: '2', code: 'ICT 102', title: 'Computing' })),
+    ]);
+    assert.deepEqual(exams.map((e) => [e.sn, e.date]), [['1', '2026-12-07']]);
+    assert.ok(warnings.some((w) => /could not read "Tues 8\/12\/26 from nine"/.test(w) && /left out/.test(w)), warnings.join('\n'));
+});
+
+test('a table whose header row is not recognised still gets the heading above it, with a note', () => {
+    const { exams, warnings } = read([
+        ...line(660, 144, 'Monday 7th December 2026 9:00 - 11:00'),
+        ...line(500, 144, 'Tuesday 8th December 2026 9:00 - 11:00'),
+        ...header(630),
+        ...row(597, one({ sn: '1', code: 'ICT 101', title: 'Introduction to ICT' })),
+        // header row in another wording: "No | Course | Subject | ..."
+        word('No', 30, 480), word('Course', 60, 480), word('Subject', 115, 480), word('Staff', 250, 480), word('Place', 360, 480),
+        ...row(450, one({ sn: '2', code: 'ICT 102', title: 'Computing' })),
+    ]);
+    assert.deepEqual(exams.map((e) => [e.sn, e.code, e.date]), [['1', 'ICT 101', '2026-12-07'], ['2', 'ICT 102', '2026-12-08']]);
+    assert.ok(warnings.some((w) => /no header row the reader recognises/.test(w)));
+});
+
+test('serial numbers written "3." are read, and a table with none is split on course codes', () => {
+    const dotted = read([
+        ...line(660, 144, 'Monday 7th December 2026 9:00 - 11:00'),
+        ...header(630),
+        ...row(597, one({ sn: '3.', code: 'ICT 101', title: 'Introduction to ICT' })),
+        ...row(560, one({ sn: '4)', code: 'ICT 102', title: 'Computing' })),
+    ]);
+    assert.deepEqual(dotted.exams.map((e) => [e.sn, e.code]), [['3', 'ICT 101'], ['4', 'ICT 102']]);
+
+    const none = read([
+        ...line(660, 144, 'Monday 7th December 2026 9:00 - 11:00'),
+        ...header(630),
+        ...row(597, one({ code: ['GEL', '101'], title: 'Use of English I' })),
+        ...row(560, one({ code: 'ICT102', title: ['Introduction to', 'Computing'] })),
+    ]);
+    assert.deepEqual(none.exams.map((e) => [e.code, e.title]), [['GEL 101', 'Use of English I'], ['ICT 102', 'Introduction to Computing']]);
+});
+
+test('page numbers, footers and unknown banners never end up inside a row', () => {
+    const { exams } = read([
+        ...line(660, 144, 'Monday 7th December 2026 9:00 - 11:00'),
+        ...line(300, 40, 'EXAM BREAK'), // a banner the reader has no rule for, at the left margin
+        ...header(630),
+        ...row(597, one({ sn: '1', code: 'ICT 101', title: 'Introduction to ICT' })),
+        ...line(40, 115, 'Page 2 of 12'),
+        ...line(60, 250, 'Registrar'),
+    ]);
+    assert.equal(exams.length, 1);
+    assert.equal(exams[0].title, 'Introduction to ICT');
+    assert.equal(exams[0].lecturer, 'Mr. Kebba Sowe');
+    assert.doesNotMatch(JSON.stringify(exams), /Page|Registrar|EXAM|BREAK/);
+});
+
+test('a header row repeated at the top of the next page continues the same session', () => {
+    const { exams } = read(
+        [
+            ...line(660, 144, 'Monday 7th December 2026 9:00 - 11:00'),
+            ...header(630),
+            ...row(597, one({ sn: '1', code: 'ICT 101', title: 'Introduction to ICT' })),
+        ],
+        [
+            ...header(700),
+            ...row(667, one({ sn: '2', code: 'ICT 102', title: 'Computing' })),
+        ],
+    );
+    assert.deepEqual(exams.map((e) => [e.sn, e.page, e.date]), [['1', 1, '2026-12-07'], ['2', 2, '2026-12-07']]);
+});
+
+test('a one-row table whose labels sit to the right of the text is still split into the right columns', () => {
+    const { exams } = read([
+        ...line(660, 144, 'Monday 7th December 2026 9:00 - 11:00'),
+        // every label 14 to the right of the cell text below it, and not overlapping it
+        word('S/n', 44, 630), word('Code', 74, 630), word('Title', 129, 630), word('Lecturer', 264, 630),
+        word('Venue', 374, 630), word('Invigilators', 434, 630), word('No.', 509, 630),
+        ...row(597, { sn: '1', code: 'IT1', title: 'Law', lecturer: 'Li Wu', venue: 'Hall', invigilators: 'All', students: '9' }),
+    ]);
+    assert.deepEqual(
+        exams.map((e) => [e.sn, e.title, e.lecturer, e.venue, e.invigilators, e.students]),
+        [['1', 'Law', 'Li Wu', 'Hall', 'All', '9']],
+    );
+});
+
+test('a cell that is really a paragraph is cut short and flagged, and a huge page is capped', () => {
+    // 120 words crammed into one title cell
+    const essay = Array.from({ length: 120 }, (_, i) => word(`word${i}`, 115, 597 - (i % 3) * 13));
+    const { exams, warnings } = read([
+        ...line(660, 144, 'Monday 7th December 2026 9:00 - 11:00'),
+        ...header(630),
+        word('1', 30, 597), word('ICT', 60, 597), word('101', 60, 584),
+        ...essay,
+        word('Theater', 360, 597), word('All', 420, 597), word('10', 495, 597),
+    ]);
+    assert.ok(exams[0].title.length <= 200);
+    assert.ok(warnings.some((w) => /cut short/.test(w)));
+
+    const flood = Array.from({ length: 50000 }, (_, i) => word('x', 100 + (i % 400), 700 - (i % 600)));
+    const started = Date.now();
+    const result = read(flood);
+    assert.ok(Date.now() - started < 3000, 'a page of junk is dealt with quickly');
+    assert.ok(result.warnings.some((w) => /far more text than a timetable page/.test(w)));
+});
+
+test('pathological heading text does not stall the reader', () => {
+    const page = [
+        ...Array.from({ length: 4000 }, (_, i) => word(i % 2 ? 'Monday' : '7th', 40 + (i % 50) * 8, 700 - Math.floor(i / 50) * 9)),
+        ...line(100, 144, 'Monday 7th December 2026 9:00 - 11:00'),
+    ];
+    const started = Date.now();
+    read(page);
+    assert.ok(Date.now() - started < 3000);
+});
+

@@ -92,10 +92,17 @@ export function dateFromText(text, todayISO) {
 /** Every weekday named in free text, in the order given, without repeats: "Monday and Tuesday" -> ["Mon", "Tue"]. */
 export function daysFromText(text) {
     const q = String(text || '').toLowerCase();
-    const found = q.matchAll(
-        /\b(mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?|mon|tues?|weds|thu(?:rs?)?|fri)\b/g,
-    );
-    return [...new Set([...found].map((m) => toDay3(m[1])).filter(Boolean))];
+    const DAY = '(mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?|mon|tues?|weds|thu(?:rs?)?|fri)';
+    const days = [];
+    // "Monday to Thursday", "Mon - Wed": every day in between as well
+    const span = q.match(new RegExp(`\\b${DAY}\\s*(?:to|until|till|through|thru|-|–)\\s*${DAY}\\b`));
+    if (span) {
+        const from = DAYS.indexOf(toDay3(span[1]));
+        const to = DAYS.indexOf(toDay3(span[2]));
+        if (from !== -1 && to !== -1) for (let i = from; i !== (to + 1) % 7; i = (i + 1) % 7) days.push(DAYS[i]);
+    }
+    for (const m of q.matchAll(new RegExp(`\\b${DAY}\\b`, 'g'))) days.push(toDay3(m[1]));
+    return [...new Set(days.filter(Boolean))].sort((x, y) => DAYS.indexOf(x) - DAYS.indexOf(y));
 }
 
 /** Order timetable rows by how soon they start, counting from now. */

@@ -1,0 +1,48 @@
+# Caddy is the only thing students' browsers talk to.
+# It gets and renews the HTTPS certificate by itself, sends http:// visitors to
+# https://, serves the built web app, and passes /api/ requests to the API.
+#
+# SITE_DOMAIN comes from the .env file next to docker-compose.yml, for example
+#   SITE_DOMAIN=assistant.example.edu
+# The certificate can only be issued once that name points at this machine and
+# ports 80 and 443 are open.
+
+{$SITE_DOMAIN} {
+	# The API. Answers are streamed (Server-Sent Events), so each piece is sent
+	# on as soon as it arrives instead of being collected first.
+	# No compression here for the same reason.
+	handle /api/* {
+		reverse_proxy api:5051 {
+			flush_interval -1
+		}
+	}
+
+	# The web app: the files from web/dist, mounted at /srv.
+	handle {
+		root * /srv
+		encode zstd gzip
+
+		header {
+			# Browsers that have visited once will only use https:// for
+			# this name for the next year.
+			Strict-Transport-Security "max-age=31536000"
+			X-Content-Type-Options "nosniff"
+			Referrer-Policy "strict-origin-when-cross-origin"
+		}
+
+		# Built files under /assets/ have a fingerprint in their name and never
+		# change. A missing one is a plain 404.
+		handle /assets/* {
+			file_server
+		}
+
+		# Everything else is a page of the single-page app (/, /admin, ...).
+		# The browser must ask again each time, so students get a new version
+		# as soon as it is deployed.
+		handle {
+			header Cache-Control "no-cache"
+			try_files {path} /index.html
+			file_server
+		}
+	}
+}

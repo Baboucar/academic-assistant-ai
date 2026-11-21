@@ -95,6 +95,10 @@ onBeforeUnmount(() => {
         v-html="html"
       />
 
+      <p v-if="message.degraded && status === 'done'" class="mt-2 text-xs text-muted-foreground" data-testid="degraded-note">
+        The AI model was busy, so this was read straight from the timetable. Ask again in a moment if it missed the point.
+      </p>
+
       <p v-if="status === 'stopped'" class="text-sm text-muted-foreground" :class="message.text ? 'mt-2' : 'pt-1'">
         {{ message.text ? 'Stopped before the answer finished.' : 'Stopped.' }}
       </p>

@@ -90,9 +90,9 @@ test('wrong codes are limited, and passwords and codes are stored only as hashes
     assert.equal(locked.status, 400);
     assert.match((await locked.json()).error, /new code/i);
 
-    const user = ctx.db.prepare(`SELECT * FROM users WHERE email = 'fatou@utg.edu'`).get();
+    const user = ctx.accountsDb.prepare(`SELECT * FROM users WHERE email = 'fatou@utg.edu'`).get();
     assert.ok(!user.password_hash.includes('correct horse'));
-    const stored = ctx.db.prepare(`SELECT code_hash FROM email_codes WHERE user_id = ?`).get(user.id);
+    const stored = ctx.accountsDb.prepare(`SELECT code_hash FROM email_codes WHERE user_id = ?`).get(user.id);
     assert.notEqual(stored.code_hash, real);
 
     // asking again straight away does not send a second email
@@ -149,3 +149,27 @@ test('password reset needs the emailed code and signs other devices out', async 
     assert.equal((await post('/login', { identifier: 'ousman@utg.edu', password: 'correct horse' })).status, 401);
     assert.equal((await post('/login', { identifier: 'ousman@utg.edu', password: 'brand new pass' })).status, 200);
 });
+
+test('one mailbox cannot hold several accounts through "+" addresses', async () => {
+    const r = await post('/register', { mat_number: '22216020', email: 'awa+second@utg.edu', password: 'correct horse' });
+    assert.equal(r.status, 400);
+    assert.match((await r.json()).error, /without a "\+"/);
+    assert.equal(outbox.length, 0);
+});
+
+test('an address cannot be sent more than a few emails a day, however the requests are spaced', async () => {
+    await post('/register', { mat_number: '22216021', email: 'flooded@utg.edu', password: 'correct horse' });
+    const user = ctx.accountsDb.prepare(`SELECT id FROM users WHERE email = 'flooded@utg.edu'`).get();
+    // pretend a minute passes between requests, so only the daily allowance is in play
+    const wait = () => ctx.accountsDb.prepare(`UPDATE email_codes SET sent_at = sent_at - 120000 WHERE user_id = ?`).run(user.id);
+
+    let statuses = [];
+    for (let i = 0; i < 6; i++) {
+        wait();
+        statuses.push((await post('/resend', { email: 'flooded@utg.edu' })).status);
+    }
+    // the test allowance is 5 a day: 1 at sign-up, then 4 more, then refused
+    assert.deepEqual(statuses, [200, 200, 200, 200, 429, 429]);
+    assert.equal(outbox.filter((m) => m.to === 'flooded@utg.edu').length, 5);
+});
+

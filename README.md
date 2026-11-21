@@ -52,12 +52,16 @@ The admin screenshot was taken before the exam timetable type and the department
 
 ```text
 academic-assistant-ai/
-├── data/          # Your timetable files (PDF / Excel / DOCX); git-ignored
-├── docs/          # Screenshots
-├── ingest/        # Ingestion script + file parsers
-├── server/        # Node.js API (Express + SQLite + Groq) and its tests
-├── tmp/           # Auto-generated SQLite DB (utg.db)
-└── web/           # Vue 3 + Vite + Tailwind + shadcn-vue chat and admin UI
+├── data/          # Your timetable files (PDF / Excel / DOCX); git-ignored. Keep.
+├── tmp/           # utg.db: what was read from those files. Can be rebuilt from data/ at any time.
+├── var/           # accounts.db: student accounts, settings and logs. CANNOT be rebuilt: back it up.
+├── backups/       # dated copies made by `npm --prefix server run backup`
+├── ingest/        # Reads the files: one reader per layout, and the checks every row passes
+├── server/        # Node.js API (Express + SQLite + Groq), its tests, the evaluation set
+├── web/           # Vue 3 + Vite + Tailwind + shadcn-vue chat and admin UI
+├── deploy/        # Caddy and production settings examples
+├── docs/          # DEPLOY.md and screenshots
+├── Dockerfile, docker-compose.yml
 ```
 
 ---
@@ -96,10 +100,15 @@ Then open `server/.env` and set at least:
 | --- | --- |
 | `GROQ_API_KEY` | Your Groq key. Chat answers need it. |
 | `ADMIN_USER`, `ADMIN_PASS` | Sign-in for the admin dashboard. Until both are set, `/api/admin/*` returns 503. |
+| `ADMIN_USERS` | More admins, each with their own password: `awa:long password,lamin:another one`. The change log records who did what. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` | Email server for sign-up and password codes. Without `SMTP_HOST`, codes are printed in the server log. |
 | `STUDENT_EMAIL_DOMAINS` | Email domains that may register, comma-separated. Defaults to `utg.edu`. |
 | `MAT_NUMBER_PATTERN` | What a matriculation number looks like. Defaults to 5 to 12 letters or digits. |
 | `CHAT_PER_MINUTE`, `CHAT_PER_DAY` | Questions each student may ask. Default 10 a minute and 150 a day. |
+| `MAIL_PER_ADDRESS_PER_DAY`, `MAIL_PER_DAY` | Emails a day to one address (8) and in total (400), to protect the mailbox's allowance. |
+| `MAT_IN_EMAIL` | Set to `1` if student addresses contain the matriculation number; sign-up then requires the two to agree. |
+| `ANSWER_CACHE_SECONDS` | How long a repeated first question is answered from memory. Default 600; `0` turns it off. |
+| `DB_PATH`, `ACCOUNTS_DB_PATH`, `DATA_DIR`, `BACKUP_DIR` | Where the timetable database, the accounts database, the uploaded files and the backups live. |
 | `DEV_SHOW_CODES` | Local testing only: with no email server, show the code on the sign-up screen. Never set it on a real deployment. |
 | `MODEL` | The model that writes answers. Defaults to `openai/gpt-oss-120b`. |
 | `ORIGIN` | Who may call the API: `*`, or a comma-separated list such as `https://assistant.example.edu`. |
@@ -160,14 +169,35 @@ npm --prefix server run dev
 Expected:
 
 ```
-API on :5051
+API on :5051 (development)
 ```
 
-Health check (also reports whether the model key is set and how many rows are loaded):
+`npm run dev` starts in development mode and prints what is still missing for real use.
+`npm --prefix server start` starts in **production mode**, which refuses to start until the settings are
+safe (a model key, admin passwords of 12+ characters, a real `ORIGIN`, an email server, no test switches).
+
+Health check:
 
 ```bash
 curl http://localhost:5051/api/health
 ```
+
+It reports the version, the mode, the semester answers come from, how many rows are loaded, and how the
+model has been doing in the last few minutes (`ai.state`: `ok`, `busy` when rate-limited, `down`, or
+`unknown`). The server staying up while `ai.state` is `busy` is what students see as "it says busy".
+
+### How a question is answered
+
+1. A repeated first question is answered from memory (no model call).
+2. The question becomes a search. Simple ones ("What classes are on today?", "When is CPS 313?",
+   "Show the upcoming exams") are read by code. The rest take one model call.
+3. The answer is written by code whenever the rows decide it: a one-line summary above a schedule (three
+   or more rows), "nothing matches", or "which department?". One or two rows, and small talk, take one
+   model call.
+4. If the model cannot be reached, the answer is written from the rows instead of failing. Only a
+   question that needs the model to be understood at all gets "busy, try again".
+
+So a question costs zero, one or two model calls, where every question used to cost two.
 
 ### Student accounts
 
@@ -198,8 +228,10 @@ curl -sS -X POST http://localhost:5051/api/chat \
   -d '{"question":"Who is teaching AI?"}'
 ```
 
-The reply is `{ answer, matches, filters, slots, schedule, clarify? }`: the answer, the timetable rows
-it was written from, and the search filters the question was turned into.
+The reply is `{ answer, matches, filters, slots, schedule, clarify?, degraded? }`: the answer, the
+timetable rows it was written from, and the search that produced them. If the search first asked for
+found nothing and a looser one did, `filters` is the looser one and the answer says so.
+`degraded` is true when the model was unavailable and code alone read the question.
 
 - `schedule` is true when there are three or more rows. The answer text then only summarises, and the
   client shows the rows as a schedule grouped by day (or by date for exams).
@@ -243,7 +275,11 @@ Add `?stream=1` to receive Server-Sent Events, each a line of `data: {json}`:
 
 Questions are capped at 500 characters. Each student may ask 10 questions a minute and 150 a day
 (`CHAT_PER_MINUTE`, `CHAT_PER_DAY`). Repeated failed admin sign-ins are also rate-limited.
-When the model provider says it is busy, the server waits and retries for a few seconds before giving up.
+When the model provider says it is busy, the server waits and retries for a few seconds, then answers
+from the rows if it can.
+
+These limits are per student. They do not protect the AI allowance as a whole, which is shared by
+everyone: see Capacity under Notes.
 
 ---
 
@@ -310,13 +346,32 @@ You can:
   can ask for one department.
 - Re-ingest one file, or everything in `data/`.
 - Remove a file from answers (database only), or delete the file as well. Both ask for confirmation.
+- **Settings**: choose the **current semester** (answers come only from it; by default it is the semester
+  of the newest upload), and add **other names for courses** ("OS" means "Operating Systems"), so
+  students can use the names they actually use.
+- **Activity**: the questions that got no answer in the last 7 days, split into "no match" and "not
+  understood", with how often each was asked; how many model calls a question takes on average; and
+  **who changed what**. Questions are stored without the student who asked.
+
+Every upload is checked before it replaces anything:
+
+- Values are put into one form (Mon..Sun, 24-hour times, ISO dates). A row that cannot be used is left
+  out and reported with its reason.
+- If a new version of a file reads nothing, or less than half of what is loaded from it, it is
+  **refused**: the old file and its rows stay, and the dashboard offers "Replace anyway". This is what
+  stops a renamed column from silently emptying a department's timetable.
+- What you chose for each file (type, semester, department) is saved beside the files in
+  `data/.sources.json`, so `data/` on its own is enough to rebuild the timetable database.
 
 Admin API endpoints (Basic Auth):
 
 - GET `/api/admin/sources`
-- POST `/api/admin/upload` (multipart form: `file`, `type` (`timetable`, `exams`, `calendar`, `notices`), `semester`, `dept`, `reingest`)
+- POST `/api/admin/upload` (multipart form: `file`, `type` (`timetable`, `exams`, `calendar`, `notices`), `semester`, `dept`, `reingest`, `force`)
 - DELETE `/api/admin/source/:file?deleteFile=0|1`
-- POST `/api/admin/reingest` with JSON `{ file?: string, semester?: string }`
+- POST `/api/admin/reingest` with JSON `{ file?, semester?, force? }` (409 when refused)
+- GET / PUT `/api/admin/settings` with `{ current_semester }`: a label, `"*"` for all, `null` for automatic
+- GET / POST `/api/admin/aliases` with `{ alias, title }`, DELETE `/api/admin/aliases/:alias`
+- GET `/api/admin/log`, GET `/api/admin/questions?days=7`
 
 Upload and re-ingest wait for the ingest to finish and return its log, so the result you see is the real one.
 
@@ -337,17 +392,36 @@ Upload and re-ingest wait for the ingest to finish and return its log, so the re
 * Only the question, the recent turns of the conversation and the matching timetable rows are sent to the model on Groq.
   The timetable files stay on the server, and everything in `data/` is git-ignored.
 
-* **Capacity**: every question costs two model calls. A free Groq key allowed about 8,000 tokens a minute
-  when this was measured, which is roughly 3 to 4 questions a minute for everyone together. That is fine
-  for trying it out and far too little for a whole campus; plan for a paid tier or another provider
-  (`GROQ_BASE_URL`, `MODEL`) before a wide launch.
+* **Capacity**: a free Groq key allowed about 8,000 tokens a minute when this was measured. Questions
+  now cost zero, one or two model calls (see "How a question is answered"), and repeats are answered from
+  memory, so that allowance goes several times further than when every question cost two calls. It is
+  still a shared allowance and still far too small for a whole campus at once: when it runs out, simple
+  questions keep working and the rest get "busy". The Activity card shows the average model calls per
+  question; plan for a paid tier or another provider (`GROQ_BASE_URL`, `MODEL`) before a wide launch.
 
-* **What is stored**: student accounts (matriculation number, email, a password hash) and sign-in
-  sessions are in the same SQLite file as the timetables, `tmp/utg.db`. Back that file up; deleting it
-  deletes the accounts. Chats are kept only in each student's browser.
+* **What is stored, and where**:
+  - `var/accounts.db`: student accounts (matriculation number, email, a password hash), sign-in sessions,
+    admin settings, course aliases, the admin change log, and the question log (question text and how it
+    went, without the student; kept 90 days). **This file cannot be rebuilt.**
+  - `tmp/utg.db`: what was read from the timetable files. Delete it and run `node ingest/ingest.js` to
+    rebuild it from `data/`.
+  - Chats are kept only in each student's browser.
 
-* **Before going live**: serve it over HTTPS, set `ORIGIN` to the site's address, configure `SMTP_*` so
-  codes are emailed, and leave `DEV_SHOW_CODES` unset.
+* **Backups**:
+
+  ```bash
+  npm --prefix server run backup
+  ```
+
+  writes dated copies of both databases to `backups/` and keeps the newest 14. It is safe while the
+  server is running. Do not copy the `.db` files by hand instead: recent changes sit in the `-wal` file
+  beside them, and a copy of the `.db` alone silently misses them. Run it nightly and copy the folder
+  off the machine. To restore: stop the server, copy a backup over `var/accounts.db` (and delete any
+  `accounts.db-wal` / `-shm` next to it), start the server.
+
+* **Going live**: follow [docs/DEPLOY.md](docs/DEPLOY.md) (one small Linux machine, Docker, Caddy for
+  HTTPS). The Docker image and Caddy setup in it have not been run yet; the guide says exactly what was
+  and was not tested.
 
 ---
 
@@ -356,6 +430,10 @@ Upload and re-ingest wait for the ingest to finish and return its log, so the re
 ```bash
 npm --prefix web test      # Vitest + Vue Test Utils
 npm --prefix server test   # node:test, against a throwaway database and a fake model
+
+npm install                # once, at the repository root: installs the linter
+npm run lint               # ESLint over server/, ingest/ and web/
+npm run check              # lint, both test suites and a production build
 ```
 
 The web tests cover the streaming parser, chat state (sending, stopping, retrying, separate saved chats
@@ -367,8 +445,20 @@ days, follow-ups, exam questions, the "which department?" question, streaming, t
 PDF reader on hand-made page layouts that copy the quirks of a real timetable.
 GitHub Actions runs both suites and a production build on every push.
 
-Not covered by tests: answers from the real model, email delivery, and real timetable files (they are
-not in the repository).
+Not covered by these tests: answers from the real model, email delivery, real timetable files (they are
+not in the repository), and the web app and server running together in a browser.
+
+### Measuring answer quality
+
+```bash
+npm --prefix server run eval -- --json ../tmp/eval-before.json
+```
+
+runs 70 realistic questions (typos, abbreviations, follow-ups, exams, things that are not in the data,
+attempts to make the assistant ignore its instructions) against the **real model** and a made-up
+timetable, and checks that the right rows were found. Run it before and after changing the model or a
+prompt, and compare with `--compare`. It takes about 12 minutes on the free tier and uses your key.
+See [server/eval/README.md](server/eval/README.md).
 
 ---
 
@@ -382,21 +472,29 @@ Save them on the account, so "my classes tomorrow" needs no follow-up question.
 
 Calendar and notice files are ingested, but chat answers only use the class and exam timetables so far.
 
-### **3. Capacity**
+### **3. A real identity for admins**
 
-Answer simple lookups without the model, and cache repeated questions, so the AI allowance goes further.
+Admins have their own passwords and their changes are logged, but they are still a list in the server's
+settings, separate from student accounts. Proper admin accounts with roles, and a way to preview or
+correct the rows read from a file before students see them, are still to do.
 
-### **4. Admin accounts**
+### **4. A budget for the AI allowance**
 
-Separate sign-ins for admins, a record of who changed what, and a way to preview or correct the rows
-read from a file before students see them.
+Per-student limits do not stop many students together from using up the shared allowance. A server-wide
+budget that switches to code-written answers before the provider starts refusing would make busy hours
+smoother.
 
 ### **5. More timetable layouts**
 
 The class timetable PDF reader still struggles with messy rows (for example a lecturer's name inside the
-course code cell). The exam PDF reader is built for the UTG school layout; other layouts will need work.
+course code cell) and has no tests of its own. The exam PDF reader is built for the UTG school layout;
+other layouts will need work.
 
-### **6. Advanced search**
+### **6. End-to-end tests**
+
+Nothing yet drives the web app and the server together in a real browser.
+
+### **7. Advanced search**
 
 * "Show conflicts for lecturer X"
 * "Show free rooms on Thursday"

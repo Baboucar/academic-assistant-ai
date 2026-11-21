@@ -183,13 +183,15 @@ export async function adminListSources(creds) {
 }
 
 /** Upload a file. Returns { ok, file, type, semester, ingest: { ok, log } | null }. */
-export async function adminUploadFile(creds, file, { type = 'timetable', semester = '', dept = '', reingest = true } = {}) {
+export async function adminUploadFile(creds, file, { type = 'timetable', semester = '', dept = '', reingest = true, force = false } = {}) {
     const fd = new FormData();
     fd.append('file', file);
     fd.append('type', type);
     fd.append('semester', semester);
     fd.append('dept', dept);
     fd.append('reingest', reingest ? '1' : '0');
+    // replace the rows already loaded even if this version reads far fewer
+    if (force) fd.append('force', '1');
     const r = await request('/api/admin/upload', { method: 'POST', headers: authHeader(creds), body: fd });
     return r.json();
 }
@@ -203,8 +205,28 @@ export async function adminDeleteSource(creds, file, deleteFile = false) {
 }
 
 /** Re-ingest one file, or everything in data/ when `file` is empty. Returns { ok, log }. */
-export async function adminReingest(creds, { file = '', semester = '' } = {}) {
-    const init = json({ file, semester });
+export async function adminReingest(creds, { file = '', semester = '', force = false } = {}) {
+    const init = json({ file, semester, force });
     const r = await request('/api/admin/reingest', { ...init, headers: { ...init.headers, ...authHeader(creds) } });
     return r.json();
 }
+
+async function adminJson(creds, path, { method = 'GET', body } = {}) {
+    const init = body === undefined ? { method, headers: {} } : { ...json(body), method };
+    const r = await request(`/api/admin${path}`, { ...init, headers: { ...init.headers, ...authHeader(creds) } });
+    return r.json();
+}
+
+/** { current_semester (pinned, "*" = all, null = automatic), active_semester, semesters: [{ semester, files }] } */
+export const adminGetSettings = (creds) => adminJson(creds, '/settings');
+export const adminSetSemester = (creds, current_semester) => adminJson(creds, '/settings', { method: 'PUT', body: { current_semester } });
+
+/** Other names for a course: { aliases: [{ alias, title }] } */
+export const adminListAliases = (creds) => adminJson(creds, '/aliases');
+export const adminAddAlias = (creds, alias, title) => adminJson(creds, '/aliases', { method: 'POST', body: { alias, title } });
+export const adminDeleteAlias = (creds, alias) => adminJson(creds, `/aliases/${encodeURIComponent(alias)}`, { method: 'DELETE' });
+
+/** Who changed what: { log: [{ at, admin, action, target, detail }] } */
+export const adminGetLog = (creds) => adminJson(creds, '/log?limit=30');
+/** What students asked lately: { questions, model_calls, cached, totals, unanswered: [{ question, outcome, times, last_at }] } */
+export const adminGetQuestions = (creds, days = 7) => adminJson(creds, `/questions?days=${days}`);

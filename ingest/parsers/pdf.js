@@ -16,7 +16,7 @@ const DAY_MAP = {
 function parseTimes(segment) {
     // accept digits, colon, dash, space, am/pm
     const cleaned = segment.replace(/[^0-9:\s\-–apm]/gi, '');
-    const m = cleaned.match(/(\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})/i);
+    const m = cleaned.match(/(\d{1,2}:\d{2})\s*[–-]\s*(\d{1,2}:\d{2})/i);
     if (!m) return [null, null];
     const to24 = (t) => {
         const [h, min] = t.split(':').map(s => s.trim());
@@ -189,7 +189,7 @@ function toISODate(raw){
     if (m) return s;
 
     // DD/MM/YYYY or D/M/YYYY
-    m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](20\d{2})$/);
+    m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](20\d{2})$/);
     if (m) {
         const [_, d, mo, y] = m;
         return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;

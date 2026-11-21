@@ -125,24 +125,23 @@ test('streams meta first, then chunks, then done', async () => {
     assert.ok(events.filter((e) => e.event === 'chunk').length > 1, 'answer arrives in several chunks');
 });
 
-test('a model failure mid-stream becomes an error event, not a hung response', async () => {
-    ctx.stub.slots = { intent: 'who_teaches', course_code: 'ICT202' };
+test('when the model fails, the answer is written from the rows instead of an error', async () => {
     ctx.stub.failAnswer = true;
-    const events = await readEvents(await ctx.post('/api/chat?stream=1', { question: 'Who teaches ICT 202?' }));
-    assert.deepEqual(events.map((e) => e.event), ['meta', 'error']);
-    assert.match(events[1].message, /try again/i);
-});
 
-test('a model failure without streaming is a 502 with a readable message', async () => {
-    ctx.stub.slots = { course_code: 'ICT202' };
-    ctx.stub.failAnswer = true;
-    const r = await ctx.post('/api/chat', { question: 'Who teaches ICT 202?' });
-    assert.equal(r.status, 502);
-    assert.doesNotMatch((await r.json()).error, /boom/);
+    const plain = await ctx.post('/api/chat', { question: 'Who teaches ICT 202?' });
+    assert.equal(plain.status, 200);
+    const body = await plain.json();
+    assert.match(body.answer, /\*\*Web Programming II\*\* \(ICT 202\): Tuesday, 08:30–11:00, Lab 1, Ms\. Fatou Sanneh\./);
+    assert.doesNotMatch(body.answer, /boom/);
+    assert.deepEqual(codes(body.matches), ['ICT 202']);
+
+    // streamed: the rows, then the fallback text, then done - never a hung or failed response
+    const events = await readEvents(await ctx.post('/api/chat?stream=1', { question: 'Who teaches ICT 202?' }));
+    assert.deepEqual(events.map((e) => e.event), ['meta', 'chunk', 'done']);
+    assert.match(events[1].text, /Web Programming II/);
 });
 
 test('a brief "busy" from the model is retried instead of failing the question', async () => {
-    ctx.stub.slots = { course_code: 'ICT202' };
     ctx.stub.answer = 'Ms. Fatou Sanneh.';
     ctx.stub.busyTimes = 2;
     const r = await ctx.post('/api/chat', { question: 'Who teaches ICT 202?' });
@@ -150,12 +149,18 @@ test('a brief "busy" from the model is retried instead of failing the question',
     assert.equal((await r.json()).answer, 'Ms. Fatou Sanneh.');
 });
 
-test('a model that stays busy gives a 429 asking to try again', async () => {
-    ctx.stub.slots = { course_code: 'ICT202' };
+test('a model that stays busy: questions code can read are still answered, the rest get a clear 429', async () => {
     ctx.stub.busyTimes = 50;
-    const r = await ctx.post('/api/chat', { question: 'Who teaches ICT 202?' });
-    assert.equal(r.status, 429);
-    assert.match((await r.json()).error, /busy/i);
+    // a course code needs no model to be understood, and the rows answer it
+    const readable = await ctx.post('/api/chat', { question: 'Who teaches ICT 202?' });
+    assert.equal(readable.status, 200);
+    assert.match((await readable.json()).answer, /Ms\. Fatou Sanneh/);
+
+    // a lecturer's name can only be picked out by the model
+    ctx.stub.busyTimes = 50;
+    const needsModel = await ctx.post('/api/chat', { question: 'Which courses does Fatou Sanneh take?' });
+    assert.equal(needsModel.status, 429);
+    assert.match((await needsModel.json()).error, /busy/i);
 });
 
 test('chat and lookups need a signed-in student', async () => {
@@ -208,22 +213,23 @@ test('a follow-up stays on exams when the model carries the flag over', async ()
     assert.equal(body.matches[0].kind, 'exam');
 });
 
-test('three or more rows are shown as a schedule, and the model is told only to summarise', async () => {
+test('three or more rows are shown as a schedule under a summary written by code, with no model call', async () => {
+    // two rows: the model writes the sentence
     ctx.stub.slots = { intent: 'generic', lecturer_name: 'Awa Ceesay' };
     const two = await (await ctx.post('/api/chat', { question: 'What does Awa Ceesay teach?' })).json();
     assert.equal(two.matches.length, 2);
     assert.equal(two.schedule, false);
-    assert.match(answerCall().body.messages[0].content, /bullet list/);
+    assert.ok(answerCall(), 'the model wrote the two-row answer');
 
+    // four rows: code writes the summary and the app draws the schedule
     ctx.stub.calls.length = 0;
-    ctx.stub.slots = { intent: 'schedule_day', dept: 'CS' };
     const many = await ctx.post('/api/chat?stream=1', { question: 'Show all CS classes' });
-    const [meta] = await readEvents(many);
-    assert.equal(meta.matches.length, 4);
-    assert.equal(meta.schedule, true);
-    const system = answerCall().body.messages[0].content;
-    assert.match(system, /Do NOT list or repeat the rows/);
-    assert.doesNotMatch(system, /bullet list/);
+    const events = await readEvents(many);
+    assert.deepEqual(events.map((e) => e.event), ['meta', 'chunk', 'done']);
+    assert.equal(events[0].matches.length, 4);
+    assert.equal(events[0].schedule, true);
+    assert.equal(events[1].text, 'There are **4 CS classes**, on Monday, Tuesday and Thursday.');
+    assert.equal(ctx.stub.calls.length, 0, 'no model call at all: code read the question and wrote the answer');
 });
 
 test('a broad question that spans departments gets "which department?" instead of a mixed answer', async () => {
@@ -242,7 +248,6 @@ test('a broad question that spans departments gets "which department?" instead o
 });
 
 test('answering "which department?" re-asks the earlier question for that department', async () => {
-    ctx.stub.slots = { intent: 'schedule_day' };
     const history = [
         { role: 'user', text: 'What classes are on Tuesday?' },
         { role: 'assistant', text: 'There are classes on Tuesday in 2 departments: CS and INS. Which department do you want?' },
@@ -252,9 +257,7 @@ test('answering "which department?" re-asks the earlier question for that depart
     assert.deepEqual(codes(ins.matches), ['INS 404']);
     assert.equal(ins.filters.dept, 'INS');
     assert.equal(ins.clarify, undefined);
-    // both model calls see the real question, not the one-word reply
-    const slotPrompt = ctx.stub.calls.find((c) => c.kind === 'slots').body.messages.at(-1).content;
-    assert.match(slotPrompt, /Latest question: What classes are on Tuesday\?/);
+    // the model answers the real question, not the one-word reply
     assert.match(answerCall().body.messages.at(-1).content, /Question: What classes are on Tuesday\?/);
 
     const all = await (await ctx.post('/api/chat', { question: 'All departments', history })).json();
@@ -263,7 +266,6 @@ test('answering "which department?" re-asks the earlier question for that depart
 });
 
 test('no department question when the student already narrowed it down', async () => {
-    ctx.stub.slots = { intent: 'schedule_day' };
     const named = await (await ctx.post('/api/chat', { question: 'What CS classes are on Tuesday?' })).json();
     assert.equal(named.clarify, undefined);
     assert.deepEqual(codes(named.matches), ['ICT 202']);
@@ -277,24 +279,23 @@ test('no department question when the student already narrowed it down', async (
     // "ins" is only a department reply right after the assistant asked
     ctx.stub.calls.length = 0;
     ctx.stub.slots = {};
-    await ctx.post('/api/chat', { question: 'ins', history: [{ role: 'user', text: 'hello' }, { role: 'assistant', text: 'Hi!' }] });
-    const slotPrompt = ctx.stub.calls.find((c) => c.kind === 'slots').body.messages.at(-1).content;
-    assert.match(slotPrompt, /Latest question: ins/, 'the earlier question is not re-asked');
+    const stray = await (await ctx.post('/api/chat', { question: 'ins', history: [{ role: 'user', text: 'hello' }, { role: 'assistant', text: 'Hi!' }] })).json();
+    assert.equal(stray.filters.dept, 'INS', 'read as the INS department on its own, not as a reply');
+    assert.ok(!ctx.stub.calls.some((c) => JSON.stringify(c.body).includes('Question: hello')), 'the earlier question is not re-asked');
 });
 
-test('a question that names two days searches both, and tells the model what was searched', async () => {
-    ctx.stub.slots = { intent: 'schedule_day', dept: 'CS', day: 'Mon' }; // the model only caught the first day
+test('a question that names two days searches both', async () => {
     const body = await (await ctx.post('/api/chat', { question: 'Show the CS classes on Monday and Tuesday' })).json();
     assert.deepEqual(body.filters.day, ['Mon', 'Tue']);
     assert.deepEqual(codes(body.matches), ['CPS 416', 'CPS 313', 'ICT 202']);
-    const prompt = answerCall().body.messages.at(-1).content;
-    assert.match(prompt, /searched with these filters: .*"day":\["Mon","Tue"\]/);
+    assert.equal(body.answer, 'There are **3 CS classes on Monday and Tuesday**.');
 
     // one day is still one day
-    ctx.stub.slots = { intent: 'schedule_day', dept: 'CS' };
     const one = await (await ctx.post('/api/chat', { question: 'Show the CS classes on Monday' })).json();
     assert.equal(one.filters.day, 'Mon');
     assert.deepEqual(codes(one.matches), ['CPS 416', 'CPS 313']);
+    // two rows go to the model, which is told what the search covered
+    assert.match(answerCall().body.messages.at(-1).content, /searched with these filters: .*"day":"Mon"/);
 });
 
 test('tools endpoints are reachable at the documented paths', async () => {

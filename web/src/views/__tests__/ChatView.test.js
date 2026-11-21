@@ -332,6 +332,17 @@ describe('ChatView', () => {
     expect(wrapper.find('[aria-label="Choose one"]').exists()).toBe(false)
   })
 
+  it('says so when the model was busy and the answer came straight from the timetable', async () => {
+    wrapper = await mountChat()
+    streamAnswer('**Web Programming II** (ICT 202): Tuesday, 08:30–11:00, Lab 1.', { matches: [ROWS[0]], filters: { course: 'ICT202' }, degraded: true })
+    await ask(wrapper, 'when is ict 202')
+    expect(wrapper.find('[data-testid="degraded-note"]').text()).toContain('The AI model was busy')
+
+    streamAnswer('A normal answer.', { matches: [ROWS[0]], filters: { course: 'ICT202' } })
+    await ask(wrapper, 'and again')
+    expect(wrapper.findAll('[data-testid="degraded-note"]')).toHaveLength(1)
+  })
+
   it('shows who is signed in', async () => {
     wrapper = await mountChat()
     const account = byLabel(wrapper, 'Account menu')
