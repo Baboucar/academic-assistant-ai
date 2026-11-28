@@ -499,3 +499,7 @@ Nothing yet drives the web app and the server together in a real browser.
 * "Show conflicts for lecturer X"
 * "Show free rooms on Thursday"
 * "Which of my exams clash?"
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -1,5 +1,6 @@
 {
   "name": "utg-academic-assistant",
+  "license": "MIT",
   "private": true,
   "description": "Tooling for the whole repository. The apps live in server/, ingest/ and web/, each with its own package.json.",
   "type": "module",
